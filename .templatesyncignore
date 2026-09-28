@@ -1,0 +1,24 @@
+# Files the template-sync workflow must never overwrite in derived repos.
+# Everything NOT listed here is treated as template-owned and kept in sync;
+# conflicts with local edits surface in the sync PR for review. Files that
+# exist only downstream (e.g. your src/ tree) are never touched by sync.
+#
+# Note: per actions-template-sync, this file itself is not synced — each
+# derived repo owns its copy and may extend it with project-divergent paths.
+
+# Replaced per project
+README.md
+
+# Records which optional subsystems the derived repo uses. Owned downstream —
+# syncing it would overwrite those choices with the template's defaults and
+# silently re-require subsystems the project deliberately declined.
+template.conf
+
+# Customized on day 0 with real owners
+.github/CODEOWNERS
+
+# Gains project-specific variables downstream
+.env.example
+
+# May be relicensed per project
+LICENSE
