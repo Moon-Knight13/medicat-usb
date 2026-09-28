@@ -1,90 +1,83 @@
-# Claude Secure Template
+# medicat-usb
 
-[![ci](https://github.com/Moon-Knight13/claude_template_repo/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Moon-Knight13/claude_template_repo/actions/workflows/ci.yml)
-[![semgrep](https://github.com/Moon-Knight13/claude_template_repo/actions/workflows/semgrep.yml/badge.svg?branch=main)](https://github.com/Moon-Knight13/claude_template_repo/actions/workflows/semgrep.yml)
-[![secret-scan](https://github.com/Moon-Knight13/claude_template_repo/actions/workflows/secret-scan.yml/badge.svg?branch=main)](https://github.com/Moon-Knight13/claude_template_repo/actions/workflows/secret-scan.yml)
+[![ci](https://github.com/Moon-Knight13/medicat-usb/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Moon-Knight13/medicat-usb/actions/workflows/ci.yml)
+[![semgrep](https://github.com/Moon-Knight13/medicat-usb/actions/workflows/semgrep.yml/badge.svg?branch=main)](https://github.com/Moon-Knight13/medicat-usb/actions/workflows/semgrep.yml)
+[![secret-scan](https://github.com/Moon-Knight13/medicat-usb/actions/workflows/secret-scan.yml/badge.svg?branch=main)](https://github.com/Moon-Knight13/medicat-usb/actions/workflows/secret-scan.yml)
 
-A language-agnostic, production-ready template for Claude-first development. Provides secure defaults, AI task routing, BMAD workflow integration, and deterministic CI gates so you can focus on your project rather than its scaffolding.
+> **Created from the [`claude_template_repo`](https://github.com/Moon-Knight13/claude_template_repo) template.**
+> That template supplies the secure Claude-first scaffolding (AI routing, security
+> gates, BMAD, Kanban, devcontainer) this repo is *built with*. What this repo *does*
+> is build a bootable rescue stick — see below.
 
-## What's Included
+**Build a [MediCat USB](https://medicatusb.com/) rescue stick from official sources with
+one script.** `make-stick.sh` fetches the latest [Ventoy](https://www.ventoy.net/),
+the current MediCat toolkit, and the newest Ubuntu ISO, verifies every download against
+its publisher's checksum, tests the stick for counterfeit capacity, and writes it.
 
-- **AI routing** — routes low-risk work to a local Ollama model; escalates to Claude for security, architecture, and cross-cutting changes
-- **Security gates** — gitleaks secret scanning, semgrep SAST (including MITRE ATLAS AI/ML rules), Trivy container scanning, all enforced in CI
-- **BMAD workflow** — structured product → engineering planning via the `/bmad` skill
-- **Kanban orchestration** — a per-repo GitHub Project board where a human orchestrator hands work to Claude sessions or local models; agents claim issues collision-free via `/next-issue` and `/run-epic` (see [docs/KANBAN_WORKFLOW.md](docs/KANBAN_WORKFLOW.md))
-- **Devcontainer** — deny-by-default network firewall, pre-installed tooling, Claude CLI with mounted auth volume
-- **Branch protection bootstrap** — one-command GitHub branch protection with required status checks
-- **Day-0 validation** — `/day0-check` walks you through every setup step with pass/fail output and remediation hints
+Nothing bootable is stored in this repo. Every archive and ISO is downloaded from its
+own publisher at build time, so the repo carries only the recipe.
 
-## How it works
+## Make a stick
 
-Work comes in as a board card, gets **routed** by risk — to a human, to Claude, or to a
-cheaper local model — and every change runs the same security gates before it merges. The
-whole loop runs inside a devcontainer whose network is deny-by-default.
-
-📊 **[Open the visual overview →](https://moon-knight13.github.io/claude_template_repo/)** —
-a one-page briefing (for technical and non-technical readers) covering the devcontainer, the
-two engines, caveman token compression, and the CI gates. Served from
-[`docs/explainer/`](docs/explainer/index.html) via GitHub Pages; the page is self-contained,
-so you can also open the HTML locally.
-
-- **Routing** derives from `scripts/route-model.sh`; the same Human/Claude/Local decision
-  shows up as the **Route** field on each board card.
-- **Gates are required, not advisory** — a red check blocks the merge (see
-  [`.github/workflows/`](.github/workflows/)).
-- **Caveman** trims Claude's prose to cut output tokens and surfaces a live per-session
-  token/cost tally in the statusline (see [docs/TEMPLATE_GUIDE.md](docs/TEMPLATE_GUIDE.md)).
-
-## Prerequisites
-
-- Docker + VS Code Dev Containers extension
-- Git with SSH access to GitHub
-- Claude Code CLI (authenticated before first session)
-- Optional: Ollama on host port 11434 for local model offload
-
-See [docs/TEMPLATE_GUIDE.md](docs/TEMPLATE_GUIDE.md) for the full setup guide including Caveman token compression and PII-Shield.
-
-## Quick Start
-
-1. **Use this template** — click "Use this template" on GitHub, or clone and re-init:
-   ```bash
-   git clone <this-repo> my-project && cd my-project && rm -rf .git && git init
-   ```
-
-2. **Open in devcontainer** — VS Code prompts to reopen; accept. The container installs all tooling automatically on start.
-
-3. **Complete day-0 setup** — two browser logins; everything else is applied automatically on container start:
-   ```bash
-   gh auth login --hostname github.com --git-protocol https --web -s project && gh auth setup-git
-   claude auth login
-   bash scripts/setup-day0.sh   # finishes the auth-gated bootstraps, prints status
-   ```
-   Verify anytime with `bash scripts/check-day0.sh` — or from Claude: `/day0-check`
-
-4. **Validate the template** — confirm all template integrity checks pass:
-   ```bash
-   bash scripts/validate-template.sh
-   ```
-
-## Repository Structure
-
-```
-.claude/commands/    Claude Code skills (/bmad, /bmad-to-board, /next-issue, /run-epic, /day0-check, /route-task, /security-audit, /firewall-allow)
-.devcontainer/       Dev environment with deny-by-default firewall and pre-installed tooling
-.github/             Workflows (CI, secret scan, semgrep, container scan, weekly audit); issue & PR templates
-docs/                TEMPLATE_GUIDE.md, AI_ROUTING_POLICY.md, BMAD_WORKFLOW.md, KANBAN_WORKFLOW.md
-scripts/             Bootstrap (incl. board), routing, CI helpers, and template validator
+```bash
+git clone https://github.com/Moon-Knight13/medicat-usb.git
+cd medicat-usb
+./make-stick.sh update          # fetch Ventoy, MediCat (~21 GB) and the latest Ubuntu ISO
+./make-stick.sh list            # find the stick, e.g. /dev/sdb
+./make-stick.sh build /dev/sdb  # wipes that stick and builds it (asks you to confirm, then for sudo)
 ```
 
-## Deriving a New Project
+Requirements: a 64 GB or larger USB stick, about 30 GB of free disk for the downloads,
+and on Debian/Ubuntu: `sudo apt install p7zip-full ntfs-3g parted dosfstools aria2 f3`.
 
-When you start a new project from this template:
+The build takes 20 to 40 minutes, mostly extracting the 28 GB MediCat tree. The script
+refuses anything that is not a whole USB disk, and runs `f3probe` first so a
+counterfeit-capacity stick is rejected before anything is written (`--skip-test` skips
+that). MBR layout is the default because it boots on old BIOS machines as well as UEFI;
+`--gpt` is available if you need it.
 
-1. Replace this `README.md` with your project README — describe what the project *is*, not the template it came from.
-2. Add `scripts/ci/lint-*.sh` and `scripts/ci/test-*.sh` for your language stack (see `scripts/ci/README.md`).
-3. Do the two day-0 logins (quick start step 3) — `scripts/setup-day0.sh` then fills CODEOWNERS, copies configs, applies branch protection, and creates the Kanban board (see [docs/KANBAN_WORKFLOW.md](docs/KANBAN_WORKFLOW.md)).
-4. Replace or remove `docs/explainer/` — it describes *this template*, not your project. If you keep a project explainer there, enable GitHub Pages to serve it (**Settings → Pages → Source: "GitHub Actions"**); the `pages` workflow publishes it on the next push. Leave Pages disabled if the page shouldn't be public.
+## Keep it fresh
 
-## License
+`./make-stick.sh update` refreshes each source, skipping anything already current and
+verified:
 
-Apache 2.0 — see [LICENSE](LICENSE).
+| Source | How the latest version is found | Verified by |
+|---|---|---|
+| Ventoy | newest GitHub release | release tarball |
+| MediCat | version + SHA-256 read from the [official installer](https://github.com/mon5termatt/medicat_installer), downloaded from the official mirrors | SHA-256 |
+| Ubuntu | newest desktop amd64 ISO on releases.ubuntu.com; older ISOs are removed | SHA256SUMS |
+| `extra-isos.txt` | fixed URLs, one `Folder/on/stick \| URL` per line | none, downloaded once |
+
+- `UBUNTU_LTS_ONLY=1 ./make-stick.sh update` stays on LTS releases (recommended for a rescue stick).
+- `UBUNTU_FLAVOUR=server` fetches the server ISO instead of desktop.
+
+## Adding your own ISOs
+
+Drop files anywhere under `isos/`; the tree is copied to the stick as-is and Ventoy lists
+everything bootable. Match MediCat's folders so the boot menu stays tidy, for example
+`isos/Live_Operating_Systems/Linux_Mint/linuxmint-22.2.iso`. Files under `isos/` are
+git-ignored.
+
+## Layout
+
+| Path | What |
+|---|---|
+| `make-stick.sh` | the tool: `update`, `list`, `build`, `status` |
+| `extra-isos.txt` | extra downloads for `update` |
+| `tools/hwtest.sh` | deeper write/read-back test for a suspect stick: `sudo tools/hwtest.sh /dev/sdX` |
+| `MediCat.USB.<ver>.7z`, `ventoy/`, `isos/`, `logs/` | fetched or generated locally, git-ignored |
+
+## Licensing
+
+The scripts here are Apache 2.0 (see `LICENSE`). MediCat, Ventoy, Ubuntu and the tools
+inside the MediCat archive are each licensed by their own publishers and are never
+redistributed by this repo; `update` downloads them from their official sources onto
+your machine, exactly as MediCat's own installer does.
+
+## Notes
+
+- First boot on a Secure Boot machine asks you to enrol Ventoy's key through MokManager once.
+- If a stick fails `f3probe`, or the build reports that the partitions vanished after the
+  Ventoy install, the stick is faulty. Bin it; no formatting will fix it.
+- The repo itself is developed inside the devcontainer inherited from the template; see
+  [docs/TEMPLATE_GUIDE.md](docs/TEMPLATE_GUIDE.md).
