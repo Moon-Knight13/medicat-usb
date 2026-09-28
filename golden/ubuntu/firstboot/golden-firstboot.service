@@ -1,0 +1,15 @@
+[Unit]
+Description=Golden first-boot: apply the Ansible playbook (retries until it succeeds)
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=!/var/lib/golden/done
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/golden-firstboot.sh
+Restart=on-failure
+RestartSec=120
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target

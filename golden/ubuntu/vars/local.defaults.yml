@@ -1,0 +1,4 @@
+---
+# Defaults used when vars/local.yml is absent (public-safe placeholders).
+git_name: "{{ golden_user }}"
+git_email: ""

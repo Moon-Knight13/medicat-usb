@@ -1,0 +1,175 @@
+---
+# Golden Ubuntu playbook: installs your favoured apps and settings on this machine.
+# Runs at first boot after a golden install (golden-firstboot.service), and can be
+# re-run at any time to converge a laptop back to this state:
+#   sudo ansible-pull -U https://github.com/Moon-Knight13/medicat-usb.git golden/ubuntu/playbook.yml
+# Or push it to remote machines from your desk with an inventory:
+#   ansible-playbook -i laptops.ini -e target=laptops golden/ubuntu/playbook.yml
+- name: Golden Ubuntu
+  hosts: "{{ target | default('localhost') }}"
+  become: true
+  vars_files:
+    - vars/apps.yml
+    - "{{ lookup('first_found', ['vars/local.yml', 'vars/local.defaults.yml']) }}"
+  vars:
+    golden_user: "{{ lookup('pipe', 'getent passwd 1000 | cut -d: -f1') }}"
+    golden_home: "/home/{{ golden_user }}"
+
+  pre_tasks:
+    - name: Sanity checks
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution == "Ubuntu"
+          - golden_user | length > 0
+        fail_msg: "This playbook targets an Ubuntu machine with a primary user (uid 1000)."
+
+    - name: Detect NVIDIA GPU
+      ansible.builtin.shell: set -o pipefail; lspci | grep -qi nvidia
+      args:
+        executable: /bin/bash
+      register: nvidia_gpu
+      changed_when: false
+      failed_when: false
+
+  tasks:
+    # ---------------------------------------------------------------- repos --
+    - name: Third-party apt repositories (deb822, key pinned per repo)
+      ansible.builtin.deb822_repository:
+        name: "{{ item.name }}"
+        uris: "{{ item.uri }}"
+        suites: "{{ item.suites }}"
+        components: "{{ item.components }}"
+        signed_by: "{{ item.key_url }}"
+        state: present
+      loop: "{{ apt_repos }}"
+      loop_control:
+        label: "{{ item.name }}"
+      notify: Apt update
+
+    - name: NVIDIA container toolkit repository
+      ansible.builtin.deb822_repository:
+        name: nvidia-container-toolkit
+        uris: https://nvidia.github.io/libnvidia-container/stable/deb/$(ARCH)
+        suites: "/"
+        signed_by: https://nvidia.github.io/libnvidia-container/gpgkey
+        state: present
+      when: nvidia_gpu.rc == 0 and nvidia_container_toolkit
+      notify: Apt update
+
+    - name: Proton VPN repository package
+      when: protonvpn
+      block:
+        - name: Download Proton VPN repo .deb
+          ansible.builtin.get_url:
+            url: "{{ protonvpn_release_deb }}"
+            dest: /tmp/protonvpn-stable-release.deb
+            mode: "0644"
+        - name: Install Proton VPN repo .deb
+          ansible.builtin.apt:
+            deb: /tmp/protonvpn-stable-release.deb
+          notify: Apt update
+
+    - name: Flush handlers so new repos are usable
+      ansible.builtin.meta: flush_handlers
+
+    # ------------------------------------------------------------- packages --
+    - name: Build the package list
+      ansible.builtin.set_fact:
+        golden_packages: >-
+          {{ apt_packages.values() | flatten
+             + (['proton-vpn-gnome-desktop'] if protonvpn else [])
+             + (['nvidia-container-toolkit'] if (nvidia_gpu.rc == 0 and nvidia_container_toolkit) else []) }}
+
+    - name: Apt packages
+      ansible.builtin.apt:
+        name: "{{ golden_packages }}"
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Resolve Obsidian's latest .deb URL
+      ansible.builtin.uri:
+        url: https://api.github.com/repos/obsidianmd/obsidian-releases/releases/latest
+        return_content: true
+      register: obsidian_release
+      changed_when: false
+
+    - name: Download .deb packages
+      ansible.builtin.get_url:
+        url: "{{ item.url }}"
+        dest: "/tmp/{{ item.name }}.deb"
+        mode: "0644"
+      loop:
+        - { name: discord, url: "https://discord.com/api/download?platform=linux&format=deb" }
+        - { name: obsidian, url: "{{ (obsidian_release.json.assets | selectattr('name', 'search', 'amd64\\.deb$') | list | first).browser_download_url }}" }
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Install .deb packages
+      ansible.builtin.apt:
+        deb: "/tmp/{{ item }}.deb"
+      loop: [discord, obsidian]
+
+    - name: Snaps
+      community.general.snap:
+        name: "{{ snaps }}"
+        state: present
+
+    - name: Flathub remote
+      community.general.flatpak_remote:
+        name: flathub
+        flatpakrepo_url: https://dl.flathub.org/repo/flathub.flatpakrepo
+        state: present
+
+    - name: Flatpaks
+      community.general.flatpak:
+        name: "{{ flatpaks }}"
+        remote: flathub
+        state: present
+
+    # ----------------------------------------------------------------- user --
+    - name: Groups that exist on this machine
+      ansible.builtin.shell: "set -o pipefail; getent group {{ user_groups | join(' ') }} | cut -d: -f1"
+      args:
+        executable: /bin/bash
+      register: existing_groups
+      changed_when: false
+
+    - name: Add the primary user to those groups
+      ansible.builtin.user:
+        name: "{{ golden_user }}"
+        groups: "{{ existing_groups.stdout_lines }}"
+        append: true
+
+    - name: Git identity (from vars/local.yml; git asks for an email if none is set)
+      ansible.builtin.template:
+        src: templates/gitconfig.j2
+        dest: "{{ golden_home }}/.gitconfig"
+        owner: "{{ golden_user }}"
+        group: "{{ golden_user }}"
+        mode: "0644"
+
+    - name: Dotfiles
+      ansible.builtin.copy:
+        src: "{{ item }}"
+        dest: "{{ golden_home }}/{{ item | basename }}"
+        owner: "{{ golden_user }}"
+        group: "{{ golden_user }}"
+        mode: "0644"
+      with_fileglob:
+        - "files/dotfiles/.*"
+
+    - name: GNOME settings
+      community.general.dconf:
+        key: "{{ item.key }}"
+        value: "{{ item.value }}"
+        state: present
+      loop: "{{ dconf_settings | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+      become_user: "{{ golden_user }}"
+
+  handlers:
+    - name: Apt update
+      ansible.builtin.apt:
+        update_cache: true

@@ -14,6 +14,7 @@
 #   ventoy/                     Ventoy release, extracted
 #   isos/<Folder>/<file>.iso    anything here is copied to the same path on the stick.
 #                               Ubuntu goes in isos/Live_Operating_Systems/Ubuntu/ automatically.
+#   golden/<name>/autoinstall.yaml  unattended install recipe for isos/Live_Operating_Systems/<Name>/*.iso
 #   extra-isos.txt              optional, one "Folder/Sub|URL" per line, downloaded by update
 #   make-stick.conf             repeatable settings (LTS-only, flavour, partition style, stick test)
 #   logs/                       build and update logs
@@ -163,6 +164,39 @@ cmd_list() {
     [[ -n "$(lsblk -dno TRAN | grep usb || true)" ]] || echo "  (none plugged in)"
 }
 
+# ---------------------------------------------------------------- golden ----
+# Copy golden/ onto the stick and register each golden/<name>/autoinstall.yaml
+# with Ventoy's auto_install plugin for the ISOs in isos/Live_Operating_Systems/<Name>/.
+# Ventoy then offers "interactive install" or "golden install" when that ISO is picked.
+install_golden() {
+    local mnt=$1
+    [[ -d "$KIT/golden" ]] || { echo "  (no golden/ folder)"; return; }
+    sudo rm -rf "$mnt/golden" && sudo cp -a "$KIT/golden" "$mnt/golden"
+    sudo python3 - "$mnt" "$KIT" <<'PY'
+import json, os, sys, glob
+mnt, kit = sys.argv[1], sys.argv[2]
+cfg_path = os.path.join(mnt, "ventoy", "ventoy.json")
+cfg = json.load(open(cfg_path)) if os.path.exists(cfg_path) else {}
+auto = [e for e in cfg.get("auto_install", []) if not str(e.get("parent", e.get("image", ""))).startswith("/Live_Operating_Systems/")]
+alias = [e for e in cfg.get("menu_alias", []) if "golden" not in str(e.get("alias", "")).lower()]
+for tmpl in sorted(glob.glob(os.path.join(kit, "golden", "*", "autoinstall.yaml"))):
+    name = os.path.basename(os.path.dirname(tmpl))            # e.g. ubuntu
+    folder = os.path.join(mnt, "Live_Operating_Systems", name.capitalize())
+    isos = sorted(glob.glob(os.path.join(folder, "*.iso")))
+    if not isos:
+        print(f"  golden/{name}: no ISO under Live_Operating_Systems/{name.capitalize()}, skipped"); continue
+    auto.append({"parent": f"/Live_Operating_Systems/{name.capitalize()}",
+                 "template": [f"/golden/{name}/autoinstall.yaml"], "timeout": 15})
+    for iso in isos:
+        rel = "/Live_Operating_Systems/" + name.capitalize() + "/" + os.path.basename(iso)
+        alias.append({"image": rel, "alias": f"{name.capitalize()} {os.path.basename(iso).split('-')[1]} (golden install available)"})
+    print(f"  golden/{name}: registered for {len(isos)} ISO(s)")
+cfg["auto_install"], cfg["menu_alias"] = auto, alias
+os.makedirs(os.path.dirname(cfg_path), exist_ok=True)
+json.dump(cfg, open(cfg_path, "w"), indent=2)
+PY
+}
+
 # ----------------------------------------------------------------- build ----
 cmd_build() {
     local dev="" skip_test=0 gpt=""
@@ -233,12 +267,15 @@ cmd_build() {
     c_info "== [4/5] Extract $(basename "$archive") (20-40 minutes) =="
     sudo 7z x -y -bsp1 -bso0 -o"$mnt" "$archive"
 
-    c_info "== [5/5] Copy ISOs from isos/ =="
+    c_info "== [5/6] Copy ISOs from isos/ =="
     if [[ -n "$(find "$ISOS" -type f | head -1)" ]]; then
         sudo cp -av "$ISOS"/. "$mnt"/
     else
         echo "  (isos/ is empty)"
     fi
+
+    c_info "== [6/6] Golden installs (golden/) =="
+    install_golden "$mnt"
     sync
     df -h "$mnt" | tail -1
     sudo umount "$mnt"; sync; sleep 2

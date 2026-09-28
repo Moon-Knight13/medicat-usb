@@ -1,0 +1,48 @@
+#cloud-config
+# Golden Ubuntu install, served by Ventoy's auto_install plugin from the MediCat stick.
+#
+# Two pages stay interactive so no secret is ever stored on the stick or in git:
+#   identity  - you type your name, username and password
+#   storage   - you choose "Erase disk" and tick "Encrypt with LUKS", then set the passphrase
+# Everything else is unattended. At first boot, golden-firstboot.service runs the
+# Ansible playbook in this folder (see playbook.yml) to install your apps and settings.
+autoinstall:
+  version: 1
+  interactive-sections:
+    - identity
+    - storage
+
+  locale: en_GB.UTF-8
+  keyboard:
+    layout: gb
+  timezone: Europe/London
+
+  source:
+    id: ubuntu-desktop          # full desktop; use ubuntu-desktop-minimal for a slimmer base
+    search_drivers: true
+  drivers:
+    install: true               # proprietary drivers (e.g. NVIDIA) where the hardware needs them
+  codecs:
+    install: true
+  updates: security
+
+  # Just enough for first boot; the playbook installs everything else.
+  packages:
+    - git
+    - ansible
+    - curl
+    - python3-apt
+
+  late-commands:
+    # Carry this golden folder onto the installed system so first boot can run
+    # offline from GitHub if needed. The stick's data partition is labelled Medicat.
+    - mkdir -p /mnt/vt && (mount -o ro LABEL=Medicat /mnt/vt 2>/dev/null || true)
+    - mkdir -p /target/opt/golden
+    - test -d /mnt/vt/golden && cp -a /mnt/vt/golden/. /target/opt/golden/ || true
+    - umount /mnt/vt 2>/dev/null || true
+    # Install and arm the first-boot unit (runs ansible-pull with retries until it succeeds).
+    - install -m 0755 /target/opt/golden/ubuntu/firstboot/golden-firstboot.sh /target/usr/local/sbin/golden-firstboot.sh
+    - install -m 0644 /target/opt/golden/ubuntu/firstboot/golden-firstboot.service /target/etc/systemd/system/golden-firstboot.service
+    - curtin in-target -- systemctl enable golden-firstboot.service
+
+  shutdown: reboot

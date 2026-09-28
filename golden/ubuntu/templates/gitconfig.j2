@@ -1,0 +1,16 @@
+# Managed by golden/ubuntu/playbook.yml (values from vars/local.yml)
+[user]
+	name = {{ git_name }}
+{% if git_email %}
+	email = {{ git_email }}
+{% else %}
+	useConfigOnly = true
+{% endif %}
+[push]
+	autoSetupRemote = true
+[credential "https://github.com"]
+	helper =
+	helper = !gh auth git-credential
+[credential "https://gist.github.com"]
+	helper =
+	helper = !gh auth git-credential
