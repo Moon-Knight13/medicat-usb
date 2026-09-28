@@ -48,8 +48,20 @@ verified:
 | Ubuntu | newest desktop amd64 ISO on releases.ubuntu.com; older ISOs are removed | SHA256SUMS |
 | `extra-isos.txt` | fixed URLs, one `Folder/on/stick \| URL` per line | none, downloaded once |
 
-- `UBUNTU_LTS_ONLY=1 ./make-stick.sh update` stays on LTS releases (recommended for a rescue stick).
-- `UBUNTU_FLAVOUR=server` fetches the server ISO instead of desktop.
+## Settings
+
+`make-stick.conf` is committed, so every stick built from this repo comes out the same:
+
+```sh
+: "${UBUNTU_LTS_ONLY:=1}"        # LTS releases only (recommended for a rescue stick)
+: "${UBUNTU_FLAVOUR:=desktop}"   # desktop | server
+: "${PARTITION_STYLE:=mbr}"      # mbr boots BIOS + UEFI; gpt if you need it
+: "${STICK_TEST:=1}"             # f3probe before writing, rejects counterfeit sticks
+```
+
+Edit the file to change the defaults for the repo, or set the same name as an environment
+variable for a one-off run, e.g. `UBUNTU_LTS_ONLY=0 ./make-stick.sh update`. The build
+flags `--gpt`, `--mbr` and `--skip-test` override the file for a single build.
 
 ## Adding your own ISOs
 
@@ -63,7 +75,8 @@ git-ignored.
 | Path | What |
 |---|---|
 | `make-stick.sh` | the tool: `update`, `list`, `build`, `status` |
-| `extra-isos.txt` | extra downloads for `update` |
+| `make-stick.conf` | repeatable settings, committed |
+| `extra-isos.txt` | extra downloads for `update`, committed |
 | `tools/hwtest.sh` | deeper write/read-back test for a suspect stick: `sudo tools/hwtest.sh /dev/sdX` |
 | `MediCat.USB.<ver>.7z`, `ventoy/`, `isos/`, `logs/` | fetched or generated locally, git-ignored |
 

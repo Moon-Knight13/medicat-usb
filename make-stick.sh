@@ -7,7 +7,7 @@
 #   ./make-stick.sh status            show what is staged in this folder
 #
 # Options for build:  --skip-test   skip the f3probe counterfeit/health test
-#                     --gpt         use GPT instead of MBR (MBR boots on more machines)
+#                     --gpt / --mbr override the partition style from make-stick.conf
 #
 # Layout of this folder:
 #   MediCat.USB.<ver>.7z        the MediCat archive (SHA-256 verified, marker file <name>.ok)
@@ -15,6 +15,7 @@
 #   isos/<Folder>/<file>.iso    anything here is copied to the same path on the stick.
 #                               Ubuntu goes in isos/Live_Operating_Systems/Ubuntu/ automatically.
 #   extra-isos.txt              optional, one "Folder/Sub|URL" per line, downloaded by update
+#   make-stick.conf             repeatable settings (LTS-only, flavour, partition style, stick test)
 #   logs/                       build and update logs
 set -euo pipefail
 
@@ -23,8 +24,13 @@ ISOS="$KIT/isos"
 LOGS="$KIT/logs"
 INSTALLER_URL="https://github.com/mon5termatt/medicat_installer/releases/latest/download/Medicat_Installer.sh"
 UBUNTU_BASE="https://releases.ubuntu.com"
+# Repeatable settings live in make-stick.conf (committed); env vars override it.
+# shellcheck disable=SC1091
+[[ -f "$KIT/make-stick.conf" ]] && source "$KIT/make-stick.conf"
 UBUNTU_FLAVOUR="${UBUNTU_FLAVOUR:-desktop}"   # desktop or server
 UBUNTU_LTS_ONLY="${UBUNTU_LTS_ONLY:-0}"        # 1 = track only LTS releases (xx.04 of even years)
+PARTITION_STYLE="${PARTITION_STYLE:-mbr}"      # mbr or gpt
+STICK_TEST="${STICK_TEST:-1}"                  # 1 = f3probe before writing
 UBUNTU_DIR="$ISOS/Live_Operating_Systems/Ubuntu"
 mkdir -p "$ISOS" "$LOGS" "$UBUNTU_DIR"
 
@@ -160,10 +166,13 @@ cmd_list() {
 # ----------------------------------------------------------------- build ----
 cmd_build() {
     local dev="" skip_test=0 gpt=""
+    [[ "$STICK_TEST" == "0" ]] && skip_test=1
+    [[ "$PARTITION_STYLE" == "gpt" ]] && gpt="-g"
     for a in "$@"; do
         case "$a" in
             --skip-test) skip_test=1 ;;
             --gpt) gpt="-g" ;;
+            --mbr) gpt="" ;;
             /dev/*) dev=$a ;;
             *) die "unknown argument: $a" ;;
         esac
