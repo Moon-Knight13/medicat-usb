@@ -57,6 +57,7 @@ apt_packages:
     - ansible
     - ansible-lint
     - android-sdk-platform-tools-common
+    - adb
   containers_vms:
     - docker-ce
     - docker-ce-cli
@@ -64,6 +65,8 @@ apt_packages:
     - docker-buildx-plugin
     - docker-compose-plugin
     - qemu-system-x86
+    - libvirt-daemon-system
+    - libvirt-clients
     - virtualbox-7.2
   desktop:
     - flatpak
@@ -86,6 +89,21 @@ flatpaks:
 
 # Proton VPN ships its own repo via a .deb; installed only if enabled.
 protonvpn: true
+
+# ClamAV, tuned for a laptop: signatures stay current, the scanner costs nothing while idle.
+# clamd holds about 1 GB of RAM once loaded, so it is started on demand (socket activation)
+# by clamdscan or the weekly scan, and stopped again when the weekly scan finishes.
+clamav_checks_per_day: 4            # freshclam polls; upstream publishes about once a day
+clamav_weekly_scan: true            # low-priority scan, mains power only, catches up if missed
+clamav_scan_paths:
+  - /home
+clamav_exclude_paths:               # regexes; big, churny or machine-generated trees
+  - ^/home/[^/]+/\.cache/
+  - ^/home/[^/]+/\.local/share/Steam/
+  - ^/home/[^/]+/snap/steam/
+  - ^/home/[^/]+/VirtualBox.VMs/
+  - ^/home/[^/]+/\.local/share/containers/
+  - ^/home/[^/]+/\.var/app/[^/]+/cache/
 
 # Extra groups for the primary user.
 user_groups:

@@ -49,6 +49,19 @@ Edit `vars/apps.yml`. Packages are grouped so a whole group can be deleted; repo
 entries with their signing key URL; snaps, flatpaks and dconf settings are plain lists.
 Lint before committing: `ansible-lint golden/ubuntu/playbook.yml`.
 
+### ClamAV
+
+Set up to cost nothing while idle. Settings live under `clamav_*` in `vars/apps.yml`.
+
+- Signatures update in the background (`clamav-freshclam`, 4 checks a day).
+- The scanner (`clamd`, about 1 GB of RAM once loaded) is not kept running. It starts on
+  demand when something scans, for example `clamdscan --fdpass ~/Downloads`.
+- `golden-clamscan.timer` scans `/home` weekly at the lowest CPU and disk priority, on
+  mains power only, then stops the scanner. Caches, Steam libraries and VM disks are skipped.
+- Findings: `/var/log/clamav/golden-scan.log`. A scan that finds something leaves
+  `golden-clamscan.service` in the failed state (`systemctl --failed`). Nothing is deleted
+  or quarantined automatically.
+
 ### Testing without a laptop
 
 ```bash

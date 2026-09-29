@@ -135,6 +135,96 @@
         remote: flathub
         state: present
 
+    # --------------------------------------------------------------- clamav --
+    - name: ClamAV signature update frequency
+      ansible.builtin.lineinfile:
+        path: /etc/clamav/freshclam.conf
+        regexp: '^Checks\s'
+        line: "Checks {{ clamav_checks_per_day }}"
+      notify: Restart freshclam
+
+    # clamd is not always running and re-reads its databases itself (SelfCheck).
+    - name: ClamAV updater does not try to notify an on-demand scanner
+      ansible.builtin.lineinfile:
+        path: /etc/clamav/freshclam.conf
+        regexp: '^NotifyClamd\s'
+        state: absent
+      notify: Restart freshclam
+
+    - name: ClamAV scanner settings
+      ansible.builtin.blockinfile:
+        path: /etc/clamav/clamd.conf
+        marker: "# {mark} golden"
+        block: |
+          ConcurrentDatabaseReload no
+          MaxThreads 4
+          {% for path in clamav_exclude_paths %}
+          ExcludePath {{ path }}
+          {% endfor %}
+      notify: Stop clamd
+
+    - name: ClamAV scanner runs at the lowest CPU and disk priority
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/clamav-daemon.service.d/golden.conf
+        mode: "0644"
+        content: |
+          [Service]
+          Nice=19
+          IOSchedulingClass=idle
+          CPUWeight=20
+      notify: Stop clamd
+
+    - name: ClamAV weekly scan units
+      ansible.builtin.copy:
+        dest: "/etc/systemd/system/{{ item.name }}"
+        mode: "0644"
+        content: "{{ item.content }}"
+      loop:
+        - name: golden-clamscan.service
+          content: |
+            [Unit]
+            Description=Golden weekly ClamAV scan (log: /var/log/clamav/golden-scan.log)
+            ConditionACPower=true
+
+            [Service]
+            Type=oneshot
+            Nice=19
+            IOSchedulingClass=idle
+            ExecStart=/usr/bin/clamdscan --fdpass --multiscan --infected --log=/var/log/clamav/golden-scan.log {{ clamav_scan_paths | join(' ') }}
+            ExecStopPost=/usr/bin/systemctl stop clamav-daemon.service
+        - name: golden-clamscan.timer
+          content: |
+            [Unit]
+            Description=Golden weekly ClamAV scan
+
+            [Timer]
+            OnCalendar=weekly
+            Persistent=true
+            RandomizedDelaySec=1h
+
+            [Install]
+            WantedBy=timers.target
+      loop_control:
+        label: "{{ item.name }}"
+      notify: Reload systemd
+
+    - name: Flush handlers so the ClamAV units are loaded
+      ansible.builtin.meta: flush_handlers
+
+    - name: ClamAV updater runs, scanner starts on demand only
+      ansible.builtin.systemd_service:
+        name: "{{ item.name }}"
+        enabled: "{{ item.enabled }}"
+        state: "{{ item.state }}"
+      loop:
+        - { name: clamav-freshclam.service, enabled: true, state: started }
+        # Service first: disabling it also disables the socket (Also=), which is then re-enabled.
+        - { name: clamav-daemon.service, enabled: false, state: stopped }
+        - { name: clamav-daemon.socket, enabled: true, state: started }
+        - { name: golden-clamscan.timer, enabled: "{{ clamav_weekly_scan }}", state: "{{ 'started' if clamav_weekly_scan else 'stopped' }}" }
+      loop_control:
+        label: "{{ item.name }}"
+
     # ----------------------------------------------------------------- user --
     - name: Groups that exist on this machine
       ansible.builtin.shell: "set -o pipefail; getent group {{ user_groups | join(' ') }} | cut -d: -f1"
@@ -180,6 +270,21 @@
       become_user: "{{ golden_user }}"
 
   handlers:
+    - name: Reload systemd
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
+    - name: Restart freshclam
+      ansible.builtin.systemd_service:
+        name: clamav-freshclam.service
+        state: restarted
+
+    - name: Stop clamd
+      ansible.builtin.systemd_service:
+        name: clamav-daemon.service
+        state: stopped
+        daemon_reload: true
+
     - name: Apt update
       ansible.builtin.apt:
         update_cache: true
