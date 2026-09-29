@@ -23,8 +23,9 @@ A wipe-and-encrypt Ubuntu desktop that ends up with your favourite apps and sett
 1. Boot the stick, choose Ubuntu, choose the golden template when Ventoy asks.
 2. **Disk setup**: choose "Erase disk and install Ubuntu" (a machine that already has an
    operating system pre-selects "Install alongside"), Next.
-3. **Encryption**: choose "Encrypt with a passphrase" (or hardware-backed encryption on a
-   machine with a TPM, which unlocks automatically), set the passphrase, Next.
+3. **Encryption**: choose "Encrypt with a passphrase" and set the passphrase, Next. You type
+   it at every boot. This is the tested path (LVM inside LUKS2). Leave hardware-backed (TPM)
+   encryption alone: it is untested here and may not load the VirtualBox or NVIDIA modules.
 4. **Identity**: your name, username, password, Next.
 5. Walk away. The install finishes, reboots, and the first boot pulls the playbook.
    Give it 15 to 30 minutes with network; check progress with
