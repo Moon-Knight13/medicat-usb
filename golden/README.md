@@ -21,7 +21,8 @@ A wipe-and-encrypt Ubuntu desktop that ends up with your favourite apps and sett
 ### At the laptop
 
 1. Boot the stick, choose Ubuntu, choose the golden template when Ventoy asks.
-2. **Disk setup**: keep "Erase disk and install Ubuntu", Next.
+2. **Disk setup**: choose "Erase disk and install Ubuntu" (a machine that already has an
+   operating system pre-selects "Install alongside"), Next.
 3. **Encryption**: choose "Encrypt with a passphrase" (or hardware-backed encryption on a
    machine with a TPM, which unlocks automatically), set the passphrase, Next.
 4. **Identity**: your name, username, password, Next.
