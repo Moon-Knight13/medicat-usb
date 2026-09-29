@@ -18,6 +18,8 @@
 #   tools/vm-test.sh click X Y           click at guest screen pixel X,Y via QMP
 #   tools/vm-test.sh key KEY             send a key (QEMU key names, e.g. ret, tab, spc)
 #   tools/vm-test.sh ssh [cmd]           ssh into an --unattended VM as user golden (port 2222)
+#   tools/vm-test.sh offline | online    unplug or replug the VM's network cable. OFFLINE=1 with `iso`
+#                                        or `boot` starts unplugged, like a laptop with no Wi-Fi joined
 #   tools/vm-test.sh stop                power off the VM
 #
 # The VM shows on VNC display :9 (e.g. `vncviewer localhost:9`) and also on a local window if
@@ -56,7 +58,7 @@ common_args() {
          -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \
          -drive if=pflash,format=raw,file="$VM/OVMF_VARS.fd" \
          -device virtio-vga -vnc :9 -monitor "unix:$MON,server,nowait" -qmp "unix:$QMP,server,nowait" \
-         -netdev user,id=n0,hostfwd=tcp:127.0.0.1:2222-:22 -device virtio-net-pci,netdev=n0 \
+         -netdev user,id=n0,hostfwd=tcp:127.0.0.1:2222-:22 -device virtio-net-pci,netdev=n0,id=nic0 \
          -device qemu-xhci -device usb-tablet -pidfile "$VM/qemu.pid" -daemonize
     if [[ -z "${DISPLAY:-}" || "${HEADLESS:-0}" == "1" ]]; then echo -display none; else echo -display gtk; fi
 }
@@ -128,6 +130,7 @@ PY
         -drive file="$VM/seed.iso",media=cdrom,readonly=on \
         -drive file="$VM/medicat.img",if=none,id=medicat,format=raw,readonly=on -device usb-storage,drive=medicat \
         "${direct[@]}" -no-reboot
+    [[ "${OFFLINE:-0}" == "1" ]] && cmd_link off
     echo "pid $(cat "$VM/qemu.pid"); screenshot with: tools/vm-test.sh shot"
     echo "The VM powers off when the install finishes; then run: tools/vm-test.sh boot"
 }
@@ -138,6 +141,7 @@ cmd_boot() {
     echo "Booting the installed disk on VNC :9"
     # shellcheck disable=SC2046
     qemu-system-x86_64 $(common_args) -drive file="$VM/disk.qcow2",if=virtio,format=qcow2
+    [[ "${OFFLINE:-0}" == "1" ]] && cmd_link off
     echo "pid $(cat "$VM/qemu.pid")"
 }
 
@@ -170,6 +174,7 @@ cmd_click() {  # pixel coordinates in the guest's current resolution (read from 
     sleep 0.1
     qmp "{\"execute\":\"input-send-event\",\"arguments\":{\"events\":[{\"type\":\"btn\",\"data\":{\"down\":false,\"button\":\"left\"}}]}}" >/dev/null
 }
+cmd_link() { mon "set_link nic0 $1" >/dev/null; echo "network cable: $1"; }
 cmd_key() { mon "sendkey ${1:?key}" >/dev/null; }
 cmd_type() {  # type lower-case letters, digits and dashes, then Enter (e.g. a LUKS passphrase)
     local t=${1:?text} i c
@@ -188,6 +193,8 @@ case "${1:-}" in
     key)   shift; cmd_key "$@" ;;
     type)  shift; cmd_type "$@" ;;
     ssh)   shift; cmd_ssh "$@" ;;
+    offline) cmd_link off ;;
+    online)  cmd_link on ;;
     stop)  cmd_stop ;;
-    *) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+    *) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

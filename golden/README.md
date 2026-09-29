@@ -27,7 +27,9 @@ A wipe-and-encrypt Ubuntu desktop that ends up with your favourite apps and sett
    it at every boot. This is the tested path (LVM inside LUKS2). Leave hardware-backed (TPM)
    encryption alone: it is untested here and may not load the VirtualBox or NVIDIA modules.
 4. **Identity**: your name, username, password, Next.
+   The install itself needs no network.
 5. Walk away. The install finishes, reboots, and the first boot pulls the playbook.
+   On Wi-Fi only: log in and join the network; the first boot retries every 2 minutes.
    Give it 15 to 30 minutes with network; check progress with
    `journalctl -u golden-firstboot -f`.
 

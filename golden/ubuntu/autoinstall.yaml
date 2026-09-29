@@ -26,12 +26,9 @@ autoinstall:
     install: true
   updates: security
 
-  # Just enough for first boot; the playbook installs everything else.
-  packages:
-    - git
-    - ansible
-    - curl
-    - python3-apt
+  # No `packages:` here on purpose. They are not on the ISO, so the installer would need a
+  # network it may not have (the Wi-Fi page is skipped) and would fail. The first boot
+  # installs what it needs (git, ansible) once the laptop is online.
 
   late-commands:
     # Carry this golden folder onto the installed system so first boot can run
