@@ -118,23 +118,6 @@
         deb: "/tmp/{{ item }}.deb"
       loop: [discord, obsidian]
 
-    - name: Snaps
-      community.general.snap:
-        name: "{{ snaps }}"
-        state: present
-
-    - name: Flathub remote
-      community.general.flatpak_remote:
-        name: flathub
-        flatpakrepo_url: https://dl.flathub.org/repo/flathub.flatpakrepo
-        state: present
-
-    - name: Flatpaks
-      community.general.flatpak:
-        name: "{{ flatpaks }}"
-        remote: flathub
-        state: present
-
     # --------------------------------------------------------------- clamav --
     - name: ClamAV signature update frequency
       ansible.builtin.lineinfile:
@@ -268,6 +251,45 @@
       loop_control:
         label: "{{ item.key }}"
       become_user: "{{ golden_user }}"
+
+    # ------------------------------------------------------- store downloads --
+    # Last on purpose: these are the largest downloads and depend on outside services. If one
+    # fails, everything above is already applied and the first-boot unit retries until it works.
+    - name: Snaps
+      community.general.snap:
+        name: "{{ snaps }}"
+        state: present
+      register: snaps_result
+      until: snaps_result is succeeded
+      retries: 3
+      delay: 20
+
+    - name: Flathub remote
+      community.general.flatpak_remote:
+        name: flathub
+        flatpakrepo_url: https://dl.flathub.org/repo/flathub.flatpakrepo
+        state: present
+
+    # Checked with `flatpak info` rather than the flatpak module: after an interrupted
+    # download the module sees the app's language pack and reports the app as installed.
+    - name: Flatpaks already installed
+      ansible.builtin.command: flatpak info --system {{ item }}
+      loop: "{{ flatpaks }}"
+      register: flatpak_info
+      changed_when: false
+      failed_when: false
+
+    - name: Flatpaks
+      ansible.builtin.command: flatpak install --system --noninteractive flathub {{ item.item }}
+      loop: "{{ flatpak_info.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: item.rc != 0
+      register: flatpaks_result
+      changed_when: true
+      until: flatpaks_result is succeeded   # large downloads; a dropped connection is common
+      retries: 3
+      delay: 20
 
   handlers:
     - name: Reload systemd

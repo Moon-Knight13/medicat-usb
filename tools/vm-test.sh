@@ -6,6 +6,9 @@
 #   tools/vm-test.sh iso --unattended    same, but identity/storage are pre-answered with throwaway
 #                                        test values so the whole chain runs hands-off: install,
 #                                        reboot, first-boot playbook. Disk is NOT encrypted in this mode.
+#       ... --unattended --encrypt=luks  same, on LVM inside LUKS (test passphrase "goldentest-luks";
+#                                        type it at boot with: vm-test.sh type goldentest-luks)
+#       ... --unattended --encrypt=tpm   same, with TPM-backed encryption (emulated TPM + secure boot)
 #   tools/vm-test.sh boot                boot the disk an `iso` run installed (the VM powers off when the
 #                                        installer finishes, because a reset would start the installer again)
 #   tools/vm-test.sh stick /dev/sdX      boot the real MediCat stick read-only (nothing is written to it)
@@ -30,9 +33,22 @@ OVMF_VARS_SRC=/usr/share/OVMF/OVMF_VARS_4M.fd
 die() { echo "ERROR: $*" >&2; exit 1; }
 mon() { printf '%s\n' "$1" | socat - "UNIX-CONNECT:$MON" 2>/dev/null | tail -n +2 || true; }
 
+MODE=$(cat "$VM/mode" 2>/dev/null || echo plain)   # plain | luks | tpm, set by the last `iso` run
+
 common_args() {
+    local machine=q35
+    if [[ "$MODE" == tpm ]]; then   # TPM-backed encryption needs secure boot and a TPM
+        OVMF_CODE=/usr/share/OVMF/OVMF_CODE_4M.ms.fd; OVMF_VARS_SRC=/usr/share/OVMF/OVMF_VARS_4M.ms.fd
+        machine=q35,smm=on
+        command -v swtpm >/dev/null || die "swtpm missing (sudo apt install swtpm)"
+        mkdir -p "$VM/tpm"; pkill -f "swtpm socket.*$VM/tpm" 2>/dev/null || true
+        swtpm socket --tpm2 --tpmstate dir="$VM/tpm" --ctrl type=unixio,path="$VM/tpm/sock" --daemon
+        echo -global driver=cfi.pflash01,property=secure,value=on \
+             -chardev socket,id=chrtpm,path="$VM/tpm/sock" -tpmdev emulator,id=tpm0,chardev=chrtpm \
+             -device tpm-crb,tpmdev=tpm0
+    fi
     [[ -f "$VM/OVMF_VARS.fd" ]] || cp "$OVMF_VARS_SRC" "$VM/OVMF_VARS.fd"
-    echo -enable-kvm -cpu host -smp "$CPUS" -m "$RAM" -machine q35 \
+    echo -enable-kvm -cpu host -smp "$CPUS" -m "$RAM" -machine "$machine" \
          -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \
          -drive if=pflash,format=raw,file="$VM/OVMF_VARS.fd" \
          -device virtio-vga -vnc :9 -monitor "unix:$MON,server,nowait" -qmp "unix:$QMP,server,nowait" \
@@ -42,21 +58,33 @@ common_args() {
 }
 
 cmd_iso() {
-    local unattended=0; [[ "${1:-}" == "--unattended" ]] && unattended=1
+    local unattended=0 encrypt=plain a
+    for a in "$@"; do
+        case "$a" in
+            --unattended) unattended=1 ;;
+            --encrypt=luks|--encrypt=tpm) encrypt=${a#--encrypt=} ;;
+            *) die "unknown argument: $a" ;;
+        esac
+    done
+    [[ $encrypt == plain || $unattended -eq 1 ]] || die "--encrypt needs --unattended (otherwise you choose on the storage page)"
     [[ -n "$ISO" ]] || die "no Ubuntu ISO staged; run ./make-stick.sh update"
     command -v xorriso >/dev/null || die "xorriso missing (sudo apt install xorriso)"
     command -v socat >/dev/null || die "socat missing (sudo apt install socat)"
     cmd_stop >/dev/null 2>&1 || true
-    rm -f "$VM/disk.qcow2" "$VM/OVMF_VARS.fd"; qemu-img create -q -f qcow2 "$VM/disk.qcow2" "$DISK_SIZE"
+    rm -rf "$VM/disk.qcow2" "$VM/OVMF_VARS.fd" "$VM/tpm"; echo "$encrypt" > "$VM/mode"; MODE=$encrypt
+    qemu-img create -q -f qcow2 "$VM/disk.qcow2" "$DISK_SIZE"
 
     # cloud-init NoCloud seed: user-data is the golden template, optionally with test answers.
     local seed="$VM/seed"; rm -rf "$seed"; mkdir -p "$seed"
     cp "$KIT/golden/ubuntu/autoinstall.yaml" "$seed/user-data"
     if [[ $unattended -eq 1 ]]; then
         [[ -f "$VM/test_key" ]] || ssh-keygen -q -t ed25519 -N "" -f "$VM/test_key" -C golden-vm-test
-        python3 - "$seed/user-data" "$(cat "$VM/test_key.pub")" <<'PY'
+        python3 - "$seed/user-data" "$(cat "$VM/test_key.pub")" "$encrypt" <<'PY'
 import sys, re
 p = sys.argv[1]; s = open(p).read(); pub = sys.argv[2]
+layout = {"plain": "name: lvm\n      sizing-policy: all",
+          "luks":  "name: lvm\n      sizing-policy: all\n      password: goldentest-luks",
+          "tpm":   "name: hybrid\n      encrypted: true"}[sys.argv[3]]
 s = re.sub(r"  interactive-sections:\n(    - .*\n)+", "", s)
 s = s.replace("  shutdown: reboot", "  ssh:\n    install-server: true\n    authorized-keys: ['%s']\n  shutdown: reboot" % pub)
 s = s.replace("  locale: en_GB.UTF-8", """  identity:
@@ -66,9 +94,8 @@ s = s.replace("  locale: en_GB.UTF-8", """  identity:
     password: "$6$goldentest$lDeVWCxzgXmFPZFaHcwXf8WlVHHhOnimOLPv0n2aHV1tj9WL4eS8RnAWnUuByeWj3m8TalckiACJX4soQbEjg."
   storage:
     layout:
-      name: lvm
-      sizing-policy: all
-  locale: en_GB.UTF-8""")
+      LAYOUT
+  locale: en_GB.UTF-8""".replace("LAYOUT", layout))
     # test password is "goldentest" (throwaway, VM only)
 open(p, "w").write(s)
 PY
@@ -85,6 +112,9 @@ PY
     "$mke2fs" -q -t ext4 -L Medicat -d "$stage" "$VM/medicat.img"
 
     # Boot the ISO's own kernel so we can put "autoinstall" on the command line, as Ventoy does.
+    # (Not under secure boot: the firmware only accepts the ISO's own signed boot chain.)
+    local direct=(-kernel "$VM/vmlinuz" -initrd "$VM/initrd" -append "boot=casper autoinstall quiet splash ---")
+    [[ "$MODE" == tpm ]] && direct=(-boot d)
     7z e -y -o"$VM" "$ISO" casper/vmlinuz casper/initrd >/dev/null
     echo "Booting $(basename "$ISO") ($( [[ $unattended -eq 1 ]] && echo unattended || echo 'identity + storage interactive' )) on VNC :9"
     # shellcheck disable=SC2046
@@ -93,8 +123,7 @@ PY
         -drive file="$ISO",media=cdrom,readonly=on \
         -drive file="$VM/seed.iso",media=cdrom,readonly=on \
         -drive file="$VM/medicat.img",if=none,id=medicat,format=raw,readonly=on -device usb-storage,drive=medicat \
-        -kernel "$VM/vmlinuz" -initrd "$VM/initrd" \
-        -append "boot=casper autoinstall quiet splash ---" -no-reboot
+        "${direct[@]}" -no-reboot
     echo "pid $(cat "$VM/qemu.pid"); screenshot with: tools/vm-test.sh shot"
     echo "The VM powers off when the install finishes; then run: tools/vm-test.sh boot"
 }
@@ -138,6 +167,11 @@ cmd_click() {  # pixel coordinates in the guest's current resolution (read from 
     qmp "{\"execute\":\"input-send-event\",\"arguments\":{\"events\":[{\"type\":\"btn\",\"data\":{\"down\":false,\"button\":\"left\"}}]}}" >/dev/null
 }
 cmd_key() { mon "sendkey ${1:?key}" >/dev/null; }
+cmd_type() {  # type lower-case letters, digits and dashes, then Enter (e.g. a LUKS passphrase)
+    local t=${1:?text} i c
+    for (( i = 0; i < ${#t}; i++ )); do c=${t:i:1}; [[ $c == - ]] && c=minus; cmd_key "$c"; sleep 0.1; done
+    cmd_key ret
+}
 cmd_ssh() { ssh -p 2222 -i "$VM/test_key" -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o LogLevel=ERROR golden@127.0.0.1 "$@"; }
 cmd_stop() { [[ -f "$VM/qemu.pid" ]] && kill "$(cat "$VM/qemu.pid")" 2>/dev/null && echo "VM stopped"; rm -f "$VM/qemu.pid"; }
 
@@ -148,7 +182,8 @@ case "${1:-}" in
     shot)  shift; cmd_shot "$@" ;;
     click) shift; cmd_click "$@" ;;
     key)   shift; cmd_key "$@" ;;
+    type)  shift; cmd_type "$@" ;;
     ssh)   shift; cmd_ssh "$@" ;;
     stop)  cmd_stop ;;
-    *) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+    *) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac
