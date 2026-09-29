@@ -8,7 +8,9 @@
 #                                        reboot, first-boot playbook. Disk is NOT encrypted in this mode.
 #       ... --unattended --encrypt=luks  same, on LVM inside LUKS (test passphrase "goldentest-luks";
 #                                        type it at boot with: vm-test.sh type goldentest-luks)
-#       ... --unattended --encrypt=tpm   same, with TPM-backed encryption (emulated TPM + secure boot)
+#       ... --unattended --encrypt=tpm   same, with TPM-backed encryption (emulated TPM + secure boot).
+#                                        Ubuntu 26.04.1 refuses this in any VM ("not available:
+#                                        running-in-vm"), so it only proves the refusal; test on hardware.
 #   tools/vm-test.sh boot                boot the disk an `iso` run installed (the VM powers off when the
 #                                        installer finishes, because a reset would start the installer again)
 #   tools/vm-test.sh stick /dev/sdX      boot the real MediCat stick read-only (nothing is written to it)
@@ -35,14 +37,16 @@ mon() { printf '%s\n' "$1" | socat - "UNIX-CONNECT:$MON" 2>/dev/null | tail -n +
 
 MODE=$(cat "$VM/mode" 2>/dev/null || echo plain)   # plain | luks | tpm, set by the last `iso` run
 
+stop_tpm() { [[ -f "$VM/tpm/pid" ]] && kill "$(cat "$VM/tpm/pid")" 2>/dev/null; rm -f "$VM/tpm/pid"; return 0; }
+
 common_args() {
     local machine=q35
     if [[ "$MODE" == tpm ]]; then   # TPM-backed encryption needs secure boot and a TPM
         OVMF_CODE=/usr/share/OVMF/OVMF_CODE_4M.ms.fd; OVMF_VARS_SRC=/usr/share/OVMF/OVMF_VARS_4M.ms.fd
         machine=q35,smm=on
         command -v swtpm >/dev/null || die "swtpm missing (sudo apt install swtpm)"
-        mkdir -p "$VM/tpm"; pkill -f "swtpm socket.*$VM/tpm" 2>/dev/null || true
-        swtpm socket --tpm2 --tpmstate dir="$VM/tpm" --ctrl type=unixio,path="$VM/tpm/sock" --daemon
+        mkdir -p "$VM/tpm"; stop_tpm
+        swtpm socket --tpm2 --tpmstate dir="$VM/tpm" --ctrl type=unixio,path="$VM/tpm/sock" --pid file="$VM/tpm/pid" --daemon
         echo -global driver=cfi.pflash01,property=secure,value=on \
              -chardev socket,id=chrtpm,path="$VM/tpm/sock" -tpmdev emulator,id=tpm0,chardev=chrtpm \
              -device tpm-crb,tpmdev=tpm0
@@ -173,7 +177,7 @@ cmd_type() {  # type lower-case letters, digits and dashes, then Enter (e.g. a L
     cmd_key ret
 }
 cmd_ssh() { ssh -p 2222 -i "$VM/test_key" -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o LogLevel=ERROR golden@127.0.0.1 "$@"; }
-cmd_stop() { [[ -f "$VM/qemu.pid" ]] && kill "$(cat "$VM/qemu.pid")" 2>/dev/null && echo "VM stopped"; rm -f "$VM/qemu.pid"; }
+cmd_stop() { stop_tpm; [[ -f "$VM/qemu.pid" ]] && kill "$(cat "$VM/qemu.pid")" 2>/dev/null && echo "VM stopped"; rm -f "$VM/qemu.pid"; }
 
 case "${1:-}" in
     iso)   shift; cmd_iso "$@" ;;
@@ -185,5 +189,5 @@ case "${1:-}" in
     type)  shift; cmd_type "$@" ;;
     ssh)   shift; cmd_ssh "$@" ;;
     stop)  cmd_stop ;;
-    *) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+    *) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac
