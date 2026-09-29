@@ -104,7 +104,7 @@ dconf_settings:
   "/org/gnome/desktop/peripherals/keyboard/numlock-state": "true"
   "/org/gnome/settings-daemon/plugins/power/sleep-inactive-ac-type": "'nothing'"
   "/org/gnome/settings-daemon/plugins/power/sleep-inactive-ac-timeout": "3600"
-  "/org/gnome/shell/favorite-apps": "['firefox_firefox.desktop', 'org.gnome.Nautilus.desktop', 'org.gnome.Terminal.desktop', 'code.desktop', 'obsidian.desktop', 'spotify_spotify.desktop', 'discord.desktop']"
+  "/org/gnome/shell/favorite-apps": "['firefox_firefox.desktop', 'org.gnome.Nautilus.desktop', 'org.gnome.Ptyxis.desktop', 'com.microsoft.VSCode.desktop', 'md.obsidian.Obsidian.desktop', 'spotify_spotify.desktop', 'discord.desktop']"
 
 # Proton VPN publishes its repo as a versioned .deb; bump when they do.
 protonvpn_release_deb: https://repo.protonvpn.com/debian/dists/stable/main/binary-all/protonvpn-stable-release_1.0.8_all.deb

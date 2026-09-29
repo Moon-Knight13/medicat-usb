@@ -67,6 +67,7 @@ s = s.replace("  locale: en_GB.UTF-8", """  identity:
   storage:
     layout:
       name: lvm
+      sizing-policy: all
   locale: en_GB.UTF-8""")
     # test password is "goldentest" (throwaway, VM only)
 open(p, "w").write(s)
