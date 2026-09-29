@@ -233,7 +233,8 @@ cmd_build() {
     sudo -v
     ( while true; do sleep 60; sudo -n true 2>/dev/null || exit; done ) &   # keep sudo alive during the long extract
     local keepalive=$!
-    trap 'kill $keepalive 2>/dev/null || true' EXIT
+    # shellcheck disable=SC2064  # expand now: keepalive is local and out of scope when EXIT fires
+    trap "kill $keepalive 2>/dev/null || true" EXIT
 
     sudo umount "$dev"* 2>/dev/null || true
 
