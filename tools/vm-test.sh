@@ -6,6 +6,8 @@
 #   tools/vm-test.sh iso --unattended    same, but identity/storage are pre-answered with throwaway
 #                                        test values so the whole chain runs hands-off: install,
 #                                        reboot, first-boot playbook. Disk is NOT encrypted in this mode.
+#   tools/vm-test.sh boot                boot the disk an `iso` run installed (the VM powers off when the
+#                                        installer finishes, because a reset would start the installer again)
 #   tools/vm-test.sh stick /dev/sdX      boot the real MediCat stick read-only (nothing is written to it)
 #   tools/vm-test.sh shot [file.png]     screenshot the running VM
 #   tools/vm-test.sh click X Y           click at guest screen pixel X,Y via QMP
@@ -73,6 +75,14 @@ PY
     printf 'instance-id: golden-vm\nlocal-hostname: golden-vm\n' > "$seed/meta-data"
     xorriso -as mkisofs -quiet -o "$VM/seed.iso" -V cidata -J -r "$seed" 2>/dev/null
 
+    # Stand-in for the stick's data partition (label Medicat) so the late-commands find
+    # /golden exactly as they do on the real stick.
+    local mke2fs; mke2fs=$(PATH="$PATH:/usr/sbin:/sbin" command -v mke2fs) || die "mke2fs missing (sudo apt install e2fsprogs)"
+    local stage="$VM/medicat"; rm -rf "$stage" "$VM/medicat.img"; mkdir -p "$stage"
+    cp -a "$KIT/golden" "$stage/golden"
+    truncate -s 64M "$VM/medicat.img"
+    "$mke2fs" -q -t ext4 -L Medicat -d "$stage" "$VM/medicat.img"
+
     # Boot the ISO's own kernel so we can put "autoinstall" on the command line, as Ventoy does.
     7z e -y -o"$VM" "$ISO" casper/vmlinuz casper/initrd >/dev/null
     echo "Booting $(basename "$ISO") ($( [[ $unattended -eq 1 ]] && echo unattended || echo 'identity + storage interactive' )) on VNC :9"
@@ -81,9 +91,20 @@ PY
         -drive file="$VM/disk.qcow2",if=virtio,format=qcow2 \
         -drive file="$ISO",media=cdrom,readonly=on \
         -drive file="$VM/seed.iso",media=cdrom,readonly=on \
+        -drive file="$VM/medicat.img",if=none,id=medicat,format=raw,readonly=on -device usb-storage,drive=medicat \
         -kernel "$VM/vmlinuz" -initrd "$VM/initrd" \
-        -append "boot=casper autoinstall quiet splash ---"
+        -append "boot=casper autoinstall quiet splash ---" -no-reboot
     echo "pid $(cat "$VM/qemu.pid"); screenshot with: tools/vm-test.sh shot"
+    echo "The VM powers off when the install finishes; then run: tools/vm-test.sh boot"
+}
+
+cmd_boot() {
+    [[ -f "$VM/disk.qcow2" ]] || die "no installed disk; run: vm-test.sh iso"
+    cmd_stop >/dev/null 2>&1 || true
+    echo "Booting the installed disk on VNC :9"
+    # shellcheck disable=SC2046
+    qemu-system-x86_64 $(common_args) -drive file="$VM/disk.qcow2",if=virtio,format=qcow2
+    echo "pid $(cat "$VM/qemu.pid")"
 }
 
 cmd_stick() {
@@ -116,16 +137,17 @@ cmd_click() {  # pixel coordinates in the guest's current resolution (read from 
     qmp "{\"execute\":\"input-send-event\",\"arguments\":{\"events\":[{\"type\":\"btn\",\"data\":{\"down\":false,\"button\":\"left\"}}]}}" >/dev/null
 }
 cmd_key() { mon "sendkey ${1:?key}" >/dev/null; }
-cmd_ssh() { ssh -p 2222 -i "$VM/test_key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o LogLevel=ERROR golden@127.0.0.1 "$@"; }
+cmd_ssh() { ssh -p 2222 -i "$VM/test_key" -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o LogLevel=ERROR golden@127.0.0.1 "$@"; }
 cmd_stop() { [[ -f "$VM/qemu.pid" ]] && kill "$(cat "$VM/qemu.pid")" 2>/dev/null && echo "VM stopped"; rm -f "$VM/qemu.pid"; }
 
 case "${1:-}" in
     iso)   shift; cmd_iso "$@" ;;
+    boot)  cmd_boot ;;
     stick) shift; cmd_stick "$@" ;;
     shot)  shift; cmd_shot "$@" ;;
     click) shift; cmd_click "$@" ;;
     key)   shift; cmd_key "$@" ;;
     ssh)   shift; cmd_ssh "$@" ;;
     stop)  cmd_stop ;;
-    *) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+    *) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac
