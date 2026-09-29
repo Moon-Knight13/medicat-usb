@@ -1,0 +1,77 @@
+#!/bin/bash
+# golden-status — show what the golden first boot is doing.
+#
+#   golden-status            one-line summary, then exit
+#   golden-status --watch    keep updating until it finishes (Ctrl+C only stops watching)
+#   golden-status --window   open --watch in a terminal window; used by the login autostart,
+#                            does nothing once the first boot has finished
+#
+# Reads /var/log/golden-firstboot.log, which golden-firstboot.sh writes. Needs no root.
+LOG=/var/log/golden-firstboot.log
+DONE=/var/lib/golden/done
+PLAYBOOK=/opt/golden/ubuntu/playbook.yml
+
+# Steps the playbook prints: every named task up to the handlers, plus fact gathering,
+# minus the play's own name and the two block headers' worth of slack. Close enough for "of about".
+total=$(awk '/^  handlers:/{exit} /^ *- name:/{n++} END{print n+0}' "$PLAYBOOK" 2>/dev/null)
+
+summary() {
+    if [[ -f "$DONE" ]]; then
+        echo "Finished $(date -d "$(cat "$DONE")" '+%a %H:%M' 2>/dev/null). Log out and back in to pick up the dock and group changes."
+        return 0
+    fi
+    [[ -r "$LOG" ]] || { echo "Not started yet (it begins a few seconds after boot)."; return 1; }
+    # Only the latest attempt: everything after the last "=== golden-firstboot" line.
+    local run; run=$(tac "$LOG" | sed '/^=== golden-firstboot /q' | tac)
+    local last; last=$(grep -a -v '^$' <<< "$run" | tail -n 1)
+    case "$last" in
+        *"is the laptop online?"*)
+            echo "Waiting for a network. Join Wi-Fi or plug in a cable; it retries every 2 minutes." ;;
+        *"playbook FAILED"*)
+            local why; why=$(awk '/^TASK \[/{t=$0} /^(fatal|failed):/{print t; exit}' <<< "$run" | sed 's/^TASK \[\(.*\)\] \**$/\1/')
+            echo "A step failed${why:+ ($why)}. It retries every 2 minutes. Details: sudo tail -n 40 $LOG" ;;
+        *)
+            if ! grep -a -q '^PLAY \[' <<< "$run"; then
+                if grep -a -q '^=== installing ' <<< "$run"; then echo "Preparing: installing git and ansible."
+                else echo "Starting."; fi
+                return 1
+            fi
+            local play n task
+            play=$(tac <<< "$run" | sed '/^PLAY \[/q' | tac)
+            n=$(grep -a -c '^TASK \[' <<< "$play")
+            task=$(grep -a '^TASK \[' <<< "$play" | tail -n 1 | sed 's/^TASK \[\(.*\)\] \**$/\1/')
+            if [[ -n "$task" ]]; then echo "Step $n of about $total: $task"
+            else echo "Starting."; fi ;;
+    esac
+    return 1
+}
+
+watch() {
+    echo "Golden install: apps and settings are installing in the background."
+    echo "It takes 15 to 30 minutes and needs a network. You can use the laptop"
+    echo "meanwhile. Closing this window does not stop it; run golden-status"
+    echo "at any time to check."
+    echo
+    # The window can open behind Ubuntu's welcome screen, so say where it is.
+    command -v notify-send >/dev/null && notify-send "Golden install is running" "Progress is in the \"Golden install\" terminal window."
+    local line prev=""
+    while true; do
+        if line=$(summary); then break; fi
+        [[ "$line" != "$prev" ]] && { printf '%s  %s\n' "$(date +%H:%M)" "$line"; prev=$line; }
+        sleep 3
+    done
+    printf '%s  %s\n' "$(date +%H:%M)" "$line"
+    command -v notify-send >/dev/null && notify-send "Golden install finished" "Log out and back in to pick up the dock and group changes."
+    echo; read -r -p "Press Enter to close. " _
+}
+
+case "${1:-}" in
+    --watch) watch ;;
+    --window)
+        [[ -f "$DONE" ]] && exit 0
+        if command -v ptyxis >/dev/null; then exec ptyxis --standalone -T "Golden install" -x "$0 --watch"
+        elif command -v gnome-terminal >/dev/null; then exec gnome-terminal --title "Golden install" -- "$0" --watch
+        else exec x-terminal-emulator -e "$0" --watch; fi ;;
+    "") summary; exit 0 ;;
+    *) sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+esac

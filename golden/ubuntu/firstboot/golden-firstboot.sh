@@ -34,5 +34,6 @@ else
 fi
 mkdir -p /var/lib/golden && date -Is > /var/lib/golden/done
 systemctl disable golden-firstboot.service
+rm -f /etc/xdg/autostart/golden-status.desktop      # no progress window at later logins
 echo "=== done; re-run any time with: sudo ansible-pull -U $REPO $PLAYBOOK"
 } >> "$LOG" 2>&1

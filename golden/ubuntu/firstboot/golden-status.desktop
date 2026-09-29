@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Golden install progress
+Comment=Shows the first-boot install until it finishes
+Exec=/usr/local/bin/golden-status --window
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true

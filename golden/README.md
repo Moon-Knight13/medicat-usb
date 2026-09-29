@@ -43,6 +43,27 @@ yours but not for a public repo, such as your git name and email. `build` copies
 stick with the rest of this folder and the first boot applies it from there. Without it,
 git is left in "ask me for an email" mode rather than guessing.
 
+### Watching the first boot
+
+A "Golden install" terminal window opens at login and lists each step until it finishes (it
+can open behind Ubuntu's welcome screen; a notification points to it). At any time:
+
+```bash
+golden-status            # one line: waiting for a network, step N of about M, failed, finished
+golden-status --watch    # keep watching
+```
+
+### Repairing or updating a laptop without reinstalling
+
+```bash
+sudo /opt/golden/ubuntu/firstboot/golden-update.sh          # from main
+sudo /opt/golden/ubuntu/firstboot/golden-update.sh <branch>  # from a branch
+```
+
+It replaces `/opt/golden` with the repo's copy (keeping the laptop's `vars/local.yml`),
+reinstalls the first-boot pieces and runs the playbook again. A laptop installed before this
+script existed can fetch it with the `curl` line at the top of the script.
+
 ### Re-converging a laptop later
 
 ```bash
