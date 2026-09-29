@@ -14,21 +14,24 @@ A wipe-and-encrypt Ubuntu desktop that ends up with your favourite apps and sett
 | Step | Where | What |
 |---|---|---|
 | Installer | `autoinstall.yaml` | Only **identity** and **storage** stay interactive, so no password, passphrase or key is ever stored on the stick or in git. Locale, keyboard, timezone, full desktop, drivers and codecs are preset. |
-| Hand-off | `autoinstall.yaml` late commands | Copies this folder to `/opt/golden` on the laptop and arms `golden-firstboot.service`. |
+| Hand-off | `autoinstall.yaml` late commands | Unpacks this folder to `/opt/golden` on the laptop and arms `golden-firstboot.service`. The folder travels inside the recipe (packed by `tools/golden-pack.sh` when the stick is built), because the installer cannot read the stick while Ventoy has the ISO booted. |
 | First boot | `firstboot/` | Waits for network, runs `ansible-pull` from this repo (falls back to the local copy), retries every 2 minutes and on every boot until it succeeds, then disables itself. Log: `/var/log/golden-firstboot.log`. |
 | Apps and settings | `playbook.yml`, `vars/apps.yml`, `files/` | Repos, packages, snaps, flatpaks, .deb downloads, user groups, dotfiles, GNOME settings. |
 
 ### At the laptop
 
 1. Boot the stick, choose Ubuntu, choose the golden template when Ventoy asks.
-2. **Disk setup**: choose "Erase disk and install Ubuntu" (a machine that already has an
-   operating system pre-selects "Install alongside"), Next.
-3. **Encryption**: choose "Encrypt with a passphrase" and set the passphrase, Next. You type
+2. **Disk setup**: choose "Erase disk and install Ubuntu" ("Install alongside" is
+   pre-selected), Next. **Check the drive on the next page**: the list includes the stick
+   itself, and it can be the one pre-selected. Pick the laptop's internal drive.
+3. **Encryption**: choose "Encrypt with a passphrase" ("No encryption" is pre-selected)
+   and set the passphrase, Next. You type
    it at every boot. This is the tested path (LVM inside LUKS2). Leave hardware-backed (TPM)
    encryption alone: it is untested here and may not load the VirtualBox or NVIDIA modules.
 4. **Identity**: your name, username, password, Next.
-   The install itself needs no network.
-5. Walk away. The install finishes, reboots, and the first boot pulls the playbook.
+5. **Review**: check the installation disk, then Install. The install needs no network.
+6. When it says "installed and ready to use", choose Restart now and remove the stick
+   when asked. Type the passphrase, log in. The first boot then pulls the playbook.
    On Wi-Fi only: log in and join the network; the first boot retries every 2 minutes.
    Give it 15 to 30 minutes with network; check progress with
    `journalctl -u golden-firstboot -f`.
@@ -45,6 +48,14 @@ git is left in "ask me for an email" mode rather than guessing.
 ```bash
 sudo ansible-pull -U https://github.com/Moon-Knight13/medicat-usb.git golden/ubuntu/playbook.yml
 ```
+
+### Updating a stick after changing anything here
+
+```bash
+./make-stick.sh golden /media/$USER/Medicat    # seconds, no wipe; then eject the stick
+```
+
+Do not copy the folder by hand: the recipe on the stick is the packed one.
 
 ### Changing what gets installed
 
@@ -71,4 +82,5 @@ Set up to cost nothing while idle. Settings live under `clamav_*` in `vars/apps.
 tools/vm-test.sh iso                 # boots the ISO with this recipe in a KVM VM (window + VNC :9)
 tools/vm-test.sh iso --unattended    # identity/storage pre-answered with throwaway values: full hands-off run
 tools/vm-test.sh stick /dev/sdX      # boots the real stick read-only to check the Ventoy menu
+OFFLINE=1 tools/vm-test.sh stick /dev/sdX --install   # the real thing: install from the stick, no network
 ```

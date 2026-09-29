@@ -4,6 +4,7 @@
 #   ./make-stick.sh update            fetch latest Ventoy, MediCat and Ubuntu ISO (skips what is current)
 #   ./make-stick.sh list              show USB drives
 #   ./make-stick.sh build /dev/sdX    wipe that USB drive and build the stick (asks for confirmation + sudo)
+#   ./make-stick.sh golden <mount>    refresh only golden/ on a built, mounted stick (no wipe)
 #   ./make-stick.sh status            show what is staged in this folder
 #
 # Options for build:  --skip-test   skip the f3probe counterfeit/health test
@@ -171,12 +172,18 @@ cmd_list() {
 install_golden() {
     local mnt=$1
     [[ -d "$KIT/golden" ]] || { echo "  (no golden/ folder)"; return; }
-    sudo rm -rf "$mnt/golden" && sudo cp -a "$KIT/golden" "$mnt/golden"
-    sudo python3 - "$mnt" "$KIT" <<'PY'
+    local as_root=sudo t; [[ -w "$mnt" ]] && as_root=""      # a stick mounted by the desktop is writable as you
+    $as_root rm -rf "$mnt/golden" && $as_root cp -r "$KIT/golden" "$mnt/golden"
+    for t in "$KIT"/golden/*/autoinstall.yaml; do            # pack the folder into each recipe
+        t=$(basename "$(dirname "$t")")
+        "$KIT/tools/golden-pack.sh" "$t" | $as_root tee "$mnt/golden/$t/autoinstall.yaml" >/dev/null
+    done
+    $as_root python3 - "$mnt" "$KIT" <<'PY'
 import json, os, sys, glob
 mnt, kit = sys.argv[1], sys.argv[2]
 cfg_path = os.path.join(mnt, "ventoy", "ventoy.json")
 cfg = json.load(open(cfg_path)) if os.path.exists(cfg_path) else {}
+before = json.dumps(cfg, sort_keys=True)
 auto = [e for e in cfg.get("auto_install", []) if not str(e.get("parent", e.get("image", ""))).startswith("/Live_Operating_Systems/")]
 alias = [e for e in cfg.get("menu_alias", []) if "golden" not in str(e.get("alias", "")).lower()]
 for tmpl in sorted(glob.glob(os.path.join(kit, "golden", "*", "autoinstall.yaml"))):
@@ -192,9 +199,18 @@ for tmpl in sorted(glob.glob(os.path.join(kit, "golden", "*", "autoinstall.yaml"
         alias.append({"image": rel, "alias": f"{name.capitalize()} {os.path.basename(iso).split('-')[1]} (golden install available)"})
     print(f"  golden/{name}: registered for {len(isos)} ISO(s)")
 cfg["auto_install"], cfg["menu_alias"] = auto, alias
-os.makedirs(os.path.dirname(cfg_path), exist_ok=True)
-json.dump(cfg, open(cfg_path, "w"), indent=2)
+if json.dumps(cfg, sort_keys=True) != before:      # untouched when a refresh changes nothing
+    os.makedirs(os.path.dirname(cfg_path), exist_ok=True)
+    json.dump(cfg, open(cfg_path, "w"), indent=2)
 PY
+}
+
+# Refresh only the golden installs on a stick that is already built and mounted.
+cmd_golden() {
+    local mnt=${1:-}
+    [[ -d "$mnt/ventoy" ]] || die "usage: $0 golden <mount point of the stick's Medicat partition>"
+    install_golden "$mnt"; sync
+    echo "Done. Unmount the stick before removing it."
 }
 
 # ----------------------------------------------------------------- build ----
@@ -288,7 +304,8 @@ cmd_build() {
 case "${1:-}" in
     update) shift; cmd_update "$@" ;;
     build)  shift; cmd_build "$@" ;;
+    golden) shift; cmd_golden "$@" ;;
     list)   cmd_list ;;
     status) cmd_status ;;
-    *) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+    *) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

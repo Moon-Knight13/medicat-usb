@@ -31,12 +31,11 @@ autoinstall:
   # installs what it needs (git, ansible) once the laptop is online.
 
   late-commands:
-    # Carry this golden folder onto the installed system so first boot can run
-    # offline from GitHub if needed. The stick's data partition is labelled Medicat.
-    - mkdir -p /mnt/vt && (mount -o ro LABEL=Medicat /mnt/vt 2>/dev/null || true)
-    - mkdir -p /target/opt/golden
-    - test -d /mnt/vt/golden && cp -a /mnt/vt/golden/. /target/opt/golden/ || true
-    - umount /mnt/vt 2>/dev/null || true
+    # Carry the golden folder onto the installed system, so first boot can run without
+    # GitHub. It travels inside this file: tools/golden-pack.sh replaces the next line with
+    # a command that unpacks it to /opt/golden. It cannot be read from the stick, because
+    # Ventoy holds the partition while the ISO is booted. make-stick.sh does the packing.
+    # @GOLDEN_PAYLOAD@
     # Install and arm the first-boot unit (runs ansible-pull with retries until it succeeds).
     - install -m 0755 /target/opt/golden/ubuntu/firstboot/golden-firstboot.sh /target/usr/local/sbin/golden-firstboot.sh
     - install -m 0644 /target/opt/golden/ubuntu/firstboot/golden-firstboot.service /target/etc/systemd/system/golden-firstboot.service

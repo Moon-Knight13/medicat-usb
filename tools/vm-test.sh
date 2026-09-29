@@ -14,6 +14,9 @@
 #   tools/vm-test.sh boot                boot the disk an `iso` run installed (the VM powers off when the
 #                                        installer finishes, because a reset would start the installer again)
 #   tools/vm-test.sh stick /dev/sdX      boot the real MediCat stick read-only (nothing is written to it)
+#   tools/vm-test.sh stick /dev/sdX --install   same, onto a blank disk that is kept: the closest
+#                                        thing to a laptop. You drive the three pages (shot/click/key/type),
+#                                        the VM powers off when the install ends, then: vm-test.sh boot
 #   tools/vm-test.sh shot [file.png]     screenshot the running VM
 #   tools/vm-test.sh click X Y           click at guest screen pixel X,Y via QMP
 #   tools/vm-test.sh key KEY             send a key (QEMU key names, e.g. ret, tab, spc)
@@ -82,7 +85,7 @@ cmd_iso() {
 
     # cloud-init NoCloud seed: user-data is the golden template, optionally with test answers.
     local seed="$VM/seed"; rm -rf "$seed"; mkdir -p "$seed"
-    cp "$KIT/golden/ubuntu/autoinstall.yaml" "$seed/user-data"
+    "$KIT/tools/golden-pack.sh" ubuntu > "$seed/user-data"     # the same packed recipe the stick gets
     if [[ $unattended -eq 1 ]]; then
         [[ -f "$VM/test_key" ]] || ssh-keygen -q -t ed25519 -N "" -f "$VM/test_key" -C golden-vm-test
         python3 - "$seed/user-data" "$(cat "$VM/test_key.pub")" "$encrypt" <<'PY'
@@ -109,14 +112,6 @@ PY
     printf 'instance-id: golden-vm\nlocal-hostname: golden-vm\n' > "$seed/meta-data"
     xorriso -as mkisofs -quiet -o "$VM/seed.iso" -V cidata -J -r "$seed" 2>/dev/null
 
-    # Stand-in for the stick's data partition (label Medicat) so the late-commands find
-    # /golden exactly as they do on the real stick.
-    local mke2fs; mke2fs=$(PATH="$PATH:/usr/sbin:/sbin" command -v mke2fs) || die "mke2fs missing (sudo apt install e2fsprogs)"
-    local stage="$VM/medicat"; rm -rf "$stage" "$VM/medicat.img"; mkdir -p "$stage"
-    cp -a "$KIT/golden" "$stage/golden"
-    truncate -s 64M "$VM/medicat.img"
-    "$mke2fs" -q -t ext4 -L Medicat -d "$stage" "$VM/medicat.img"
-
     # Boot the ISO's own kernel so we can put "autoinstall" on the command line, as Ventoy does.
     # (Not under secure boot: the firmware only accepts the ISO's own signed boot chain.)
     local direct=(-kernel "$VM/vmlinuz" -initrd "$VM/initrd" -append "boot=casper autoinstall quiet splash ---")
@@ -128,7 +123,6 @@ PY
         -drive file="$VM/disk.qcow2",if=virtio,format=qcow2 \
         -drive file="$ISO",media=cdrom,readonly=on \
         -drive file="$VM/seed.iso",media=cdrom,readonly=on \
-        -drive file="$VM/medicat.img",if=none,id=medicat,format=raw,readonly=on -device usb-storage,drive=medicat \
         "${direct[@]}" -no-reboot
     [[ "${OFFLINE:-0}" == "1" ]] && cmd_link off
     echo "pid $(cat "$VM/qemu.pid"); screenshot with: tools/vm-test.sh shot"
@@ -146,33 +140,32 @@ cmd_boot() {
 }
 
 cmd_stick() {
-    local dev=${1:-}; [[ -b "$dev" ]] || die "usage: vm-test.sh stick /dev/sdX"
+    local dev=${1:-} install=0; [[ "${2:-}" == "--install" ]] && install=1
+    [[ -b "$dev" ]] || die "usage: vm-test.sh stick /dev/sdX [--install]"
     [[ "$(lsblk -dno TRAN "$dev")" == "usb" ]] || die "$dev is not a USB drive"
     [[ -r "$dev" ]] || die "need read access to $dev (e.g. sudo setfacl -m u:$USER:r $dev)"
     cmd_stop >/dev/null 2>&1 || true
+    local disk_opts=snapshot=on extra=()
+    if [[ $install -eq 1 ]]; then   # a real install from the stick: blank disk that keeps what is written
+        rm -rf "$VM/disk.qcow2" "$VM/OVMF_VARS.fd" "$VM/tpm"; echo plain > "$VM/mode"; MODE=plain
+        disk_opts=snapshot=off; extra=(-no-reboot)
+    fi
     [[ -f "$VM/disk.qcow2" ]] || qemu-img create -q -f qcow2 "$VM/disk.qcow2" "$DISK_SIZE"
-    echo "Booting $dev read-only (-snapshot: writes go to RAM, never to the stick) on VNC :9"
+    echo "Booting $dev read-only (snapshot: writes go to a temporary overlay, never to the stick) on VNC :9"
     # shellcheck disable=SC2046
-    qemu-system-x86_64 $(common_args) -snapshot \
-        -drive file="$dev",if=none,id=stick,format=raw,readonly=on -device usb-storage,drive=stick,bootindex=0 \
-        -drive file="$VM/disk.qcow2",if=virtio,format=qcow2
+    qemu-system-x86_64 $(common_args) "${extra[@]}" \
+        -drive file="$dev",if=none,id=stick,format=raw,snapshot=on -device usb-storage,drive=stick,bootindex=0 \
+        -drive "file=$VM/disk.qcow2,if=virtio,format=qcow2,$disk_opts"
+    [[ "${OFFLINE:-0}" == "1" ]] && cmd_link off
     echo "pid $(cat "$VM/qemu.pid")"
 }
 
 cmd_shot() { local out=${1:-$VM/shot-$(date +%H%M%S).png}; mon "screendump $VM/shot.ppm" >/dev/null; sleep 1; python3 -c "
 from PIL import Image; Image.open('$VM/shot.ppm').save('$out')" 2>/dev/null || convert "$VM/shot.ppm" "$out"; echo "$out"; }
-qmp() {  # qmp '<json command>'
-    printf '{"execute":"qmp_capabilities"}\n%s\n' "$1" | socat -t 2 - "UNIX-CONNECT:$QMP" 2>/dev/null | tail -n1
-}
 cmd_click() {  # pixel coordinates in the guest's current resolution (read from a fresh screendump)
     mon "screendump $VM/shot.ppm" >/dev/null; sleep 0.5
-    read -r _ w h < <(head -c 32 "$VM/shot.ppm" | tr '\n' ' ')
-    local x=$(( ${1:?x} * 32767 / w )) y=$(( ${2:?y} * 32767 / h ))
-    qmp "{\"execute\":\"input-send-event\",\"arguments\":{\"events\":[{\"type\":\"abs\",\"data\":{\"axis\":\"x\",\"value\":$x}},{\"type\":\"abs\",\"data\":{\"axis\":\"y\",\"value\":$y}}]}}" >/dev/null
-    sleep 0.2
-    qmp "{\"execute\":\"input-send-event\",\"arguments\":{\"events\":[{\"type\":\"btn\",\"data\":{\"down\":true,\"button\":\"left\"}}]}}" >/dev/null
-    sleep 0.1
-    qmp "{\"execute\":\"input-send-event\",\"arguments\":{\"events\":[{\"type\":\"btn\",\"data\":{\"down\":false,\"button\":\"left\"}}]}}" >/dev/null
+    read -r _ w h _ < <(head -c 32 "$VM/shot.ppm" | tr '\n' ' ') || true   # no trailing newline: read reports EOF
+    "$KIT/tools/vm-click.py" "$QMP" $(( ${1:?x} * 32767 / w )) $(( ${2:?y} * 32767 / h ))
 }
 cmd_link() { mon "set_link nic0 $1" >/dev/null; echo "network cable: $1"; }
 cmd_key() { mon "sendkey ${1:?key}" >/dev/null; }
@@ -196,5 +189,5 @@ case "${1:-}" in
     offline) cmd_link off ;;
     online)  cmd_link on ;;
     stop)  cmd_stop ;;
-    *) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+    *) sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac
