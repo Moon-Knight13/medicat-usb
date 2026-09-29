@@ -12,6 +12,12 @@ REPO="${GOLDEN_REPO:-https://github.com/Moon-Knight13/medicat-usb.git}"
 BRANCH="${1:-${GOLDEN_BRANCH:-main}}"
 [[ $EUID -eq 0 ]] || { echo "ERROR: run with sudo" >&2; exit 1; }
 
+# Never cut a running install short: stopping apt or snap halfway leaves packages half set up.
+if pgrep -f 'ansible-playbook|ansible-pull' >/dev/null; then
+    echo "An install is running; waiting for it to end before updating (golden-status shows where it is)."
+    while pgrep -f 'ansible-playbook|ansible-pull' >/dev/null; do sleep 10; done
+fi
+
 command -v git >/dev/null || { apt-get -q update && apt-get -qy install git; }
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 git clone -q --depth 1 --branch "$BRANCH" "$REPO" "$tmp/repo"
