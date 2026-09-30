@@ -116,10 +116,13 @@ of the RAM, within `deck_*` in `vars/apps.yml`).
 | Discord, Obsidian | update themselves | on launch |
 | ClamAV signatures | freshclam | 4 times a day |
 | Firmware and BIOS | fwupd metadata daily; updates listed by `golden-status`, applied by you | daily |
-| This recipe | `golden-converge.timer` re-applies the playbook from the repo (`golden_auto_converge`) | weekly, on mains power |
+| This recipe | `sudo golden-update.sh` when you choose to | never by itself |
 
-`golden-status` says when a reboot is pending. A change merged to `main` reaches every laptop
-within a week; set `golden_auto_converge: false` on a laptop you want to pin.
+`golden-status` says when a reboot is pending. Nothing re-applies the recipe by itself: run
+`sudo golden-update.sh` to bring a laptop up to date. An update never wipes, reboots or removes
+anything, and it leaves your personal preferences alone: desktop settings, VS Code settings, git
+and ssh config and dotfiles are applied once at first boot, and changes you make afterwards
+stay. To re-apply them: `sudo golden-update.sh --preferences`.
 
 ### Watching the first boot
 

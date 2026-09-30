@@ -112,7 +112,7 @@ claude_plugins: superpowers code-review commit-commands skill-creator frontend-d
 
 # Keep the laptop current after deployment (all on mains power only where it matters):
 #   apt: security + updates pockets and the third-party repos above, daily, no automatic reboot
-#   flatpak: weekly update; golden: re-apply this playbook from the repo weekly
+#   flatpak: weekly update. The recipe itself changes only when you run golden-update.sh.
 auto_updates: true
 auto_update_origins:         # unattended-upgrades Origins-Pattern entries
   - "o=Ubuntu,a=${distro_codename}-security"
@@ -124,7 +124,6 @@ auto_update_origins:         # unattended-upgrades Origins-Pattern entries
   - "o=HashiCorp"
   - "o=Oracle Corporation"
   - "o=proton-gitlab"
-golden_auto_converge: true   # weekly: pull the repo's playbook and apply it (off = only golden-update.sh)
 
 # "deck": a disposable browser VM in VirtualBox for research, made once per machine by
 # deck-create (minimal Ubuntu + Firefox from the golden ISO, snapshot "Ready"); deck-reset

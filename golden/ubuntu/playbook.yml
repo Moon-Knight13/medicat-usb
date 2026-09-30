@@ -24,6 +24,18 @@
           - golden_user | length > 0
         fail_msg: "This playbook targets an Ubuntu machine with a primary user (uid 1000)."
 
+    # Personal preferences (desktop settings, VS Code, git and ssh config, dotfiles) are applied
+    # once, at first boot, and then left alone so changes made on the laptop stick. A later
+    # update manages everything else. golden-update.sh --preferences re-applies them.
+    - name: Have the preferences been applied before
+      ansible.builtin.stat:
+        path: /var/lib/golden/preferences-applied
+      register: prefs_marker
+
+    - name: Apply preferences on this run
+      ansible.builtin.set_fact:
+        apply_prefs: "{{ (not prefs_marker.stat.exists) or (force_preferences | default(false) | bool) }}"
+
     - name: State directories
       ansible.builtin.file:
         path: "{{ item }}"
@@ -251,6 +263,8 @@
 
     # SSH: one new key per machine (never carried between machines). The config in local/
     # (ssh_config, on the stick only) can reference it as ~/.ssh/id_ed25519.
+      when: apply_prefs
+
     - name: SSH key for this machine
       ansible.builtin.user:
         name: "{{ golden_user }}"
@@ -266,7 +280,7 @@
         owner: "{{ golden_user }}"
         group: "{{ golden_user }}"
         mode: "0600"
-      when: lookup('ansible.builtin.fileglob', 'local/ssh_config') | length > 0
+      when: apply_prefs and (lookup('ansible.builtin.fileglob', 'local/ssh_config') | length > 0)
 
     - name: This machine's public key
       ansible.builtin.slurp:
@@ -316,7 +330,7 @@
         mode: "0644"
       with_fileglob:
         - "files/dotfiles/.*"
-      when: item | basename != '.keep'
+      when: apply_prefs and (item | basename != '.keep')
 
     - name: Claude Code, plugins and caveman for the primary user
       ansible.builtin.script: files/claude-setup.sh
@@ -349,6 +363,7 @@
         group: "{{ golden_user }}"
         mode: "0644"
       loop: [settings.json, keybindings.json]
+      when: apply_prefs
 
     - name: VS Code extensions already installed
       ansible.builtin.command: code --list-extensions
@@ -377,6 +392,8 @@
       become_user: "{{ golden_user }}"
 
     # ---------------------------------------------------------- sustainment --
+      when: apply_prefs
+
     - name: Automatic updates
       when: auto_updates
       block:
@@ -437,38 +454,18 @@
             label: "{{ item.name }}"
           notify: Reload systemd
 
-    - name: Weekly re-apply of this playbook from the repo
-      ansible.builtin.copy:
-        dest: "/etc/systemd/system/{{ item.name }}"
-        mode: "0644"
-        content: "{{ item.content }}"
-      loop:
-        - name: golden-converge.service
-          content: |
-            [Unit]
-            Description=Golden weekly converge: re-apply the playbook from the repo (log: /var/log/golden-firstboot.log)
-            ConditionACPower=true
-            Wants=network-online.target
-            After=network-online.target
+    - name: No weekly converge timer (dropped; laptops change only via golden-update.sh)
+      ansible.builtin.systemd_service:
+        name: golden-converge.timer
+        enabled: false
+        state: stopped
+      failed_when: false
 
-            [Service]
-            Type=oneshot
-            EnvironmentFile=-/etc/default/golden
-            ExecStart=/usr/local/sbin/golden-firstboot.sh
-        - name: golden-converge.timer
-          content: |
-            [Unit]
-            Description=Golden weekly converge
-
-            [Timer]
-            OnCalendar=weekly
-            Persistent=true
-            RandomizedDelaySec=6h
-
-            [Install]
-            WantedBy=timers.target
-      loop_control:
-        label: "{{ item.name }}"
+    - name: Remove the converge units if a laptop still has them
+      ansible.builtin.file:
+        path: "/etc/systemd/system/{{ item }}"
+        state: absent
+      loop: [golden-converge.timer, golden-converge.service]
       notify: Reload systemd
 
     - name: Flush handlers so the timers are loaded
@@ -481,7 +478,6 @@
         state: "{{ 'started' if item.wanted else 'stopped' }}"
       loop:
         - { name: golden-flatpak-update.timer, wanted: "{{ auto_updates }}" }
-        - { name: golden-converge.timer, wanted: "{{ golden_auto_converge }}" }
       loop_control:
         label: "{{ item.name }}"
 
@@ -608,6 +604,13 @@
           loop_control:
             label: firmware updates
           when: fw_updates.stdout_lines | select('search', '->') | list | length > 0
+
+    - name: Remember that the preferences were applied
+      ansible.builtin.copy:
+        dest: /var/lib/golden/preferences-applied
+        mode: "0644"
+        content: "{{ ansible_date_time.iso8601 }}\n"
+      when: apply_prefs
 
     - name: Write the list of steps left to do by hand
       ansible.builtin.copy:

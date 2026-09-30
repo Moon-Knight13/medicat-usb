@@ -1,7 +1,10 @@
 #!/bin/bash
 # golden-update.sh — bring an installed laptop up to date with the repo, without reinstalling.
 #
-#   sudo /opt/golden/ubuntu/firstboot/golden-update.sh [branch]   (default: the branch last used, else main)
+#   sudo /opt/golden/ubuntu/firstboot/golden-update.sh [branch] [--preferences]
+#       branch: default is the branch last used, else main. --preferences re-applies the
+#       personal preferences (desktop, VS Code, git/ssh config, dotfiles), which are
+#       otherwise applied once at first boot and then left alone.
 #   From a laptop that does not have it yet (replace <branch> with main once golden/ is merged):
 #   curl -fsSL https://raw.githubusercontent.com/Moon-Knight13/medicat-usb/<branch>/golden/ubuntu/firstboot/golden-update.sh | sudo bash -s <branch>
 #
@@ -12,7 +15,9 @@
 set -euo pipefail
 [[ -f /etc/default/golden ]] && . /etc/default/golden
 REPO="${GOLDEN_REPO:-https://github.com/Moon-Knight13/medicat-usb.git}"
-BRANCH="${1:-${GOLDEN_BRANCH:-main}}"
+prefs=0; args=()
+for a in "$@"; do case "$a" in --preferences) prefs=1 ;; *) args+=("$a") ;; esac; done
+BRANCH="${args[0]:-${GOLDEN_BRANCH:-main}}"
 [[ $EUID -eq 0 ]] || { echo "ERROR: run with sudo" >&2; exit 1; }
 
 # Never cut a running install short: stopping apt or snap halfway leaves packages half set up.
@@ -42,6 +47,8 @@ install -m 0755 "$fb/golden-status" /usr/local/bin/golden-status
 install -m 0755 "$fb/golden-projects" /usr/local/bin/golden-projects
 install -D -m 0644 "$fb/golden-status.desktop" /etc/xdg/autostart/golden-status.desktop
 printf 'GOLDEN_REPO=%s\nGOLDEN_BRANCH=%s\n' "$REPO" "$BRANCH" > /etc/default/golden
+[[ "$BRANCH" == main ]] || echo "NOTE: this laptop now follows branch '$BRANCH' weekly, which has no branch protection; switch back with: golden-update.sh main"
+[[ $prefs -eq 1 ]] && rm -f /var/lib/golden/preferences-applied
 
 # Run it again through the unit, so retries and the log behave as on a first boot.
 rm -f /var/lib/golden/done
