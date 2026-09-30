@@ -16,9 +16,12 @@ BRANCH="${1:-${GOLDEN_BRANCH:-main}}"
 [[ $EUID -eq 0 ]] || { echo "ERROR: run with sudo" >&2; exit 1; }
 
 # Never cut a running install short: stopping apt or snap halfway leaves packages half set up.
-if pgrep -f 'ansible-playbook|ansible-pull' >/dev/null; then
+# (Match the executables, not any command line that mentions them.)
+running() { [[ "$(systemctl is-active golden-firstboot.service 2>/dev/null)" == activating ]] \
+            || pgrep -f '^(/usr/bin/python3? )?/usr/bin/ansible-(playbook|pull)( |$)' >/dev/null; }
+if running; then
     echo "An install is running; waiting for it to end before updating (golden-status shows where it is)."
-    while pgrep -f 'ansible-playbook|ansible-pull' >/dev/null; do sleep 10; done
+    while running; do sleep 10; done
 fi
 
 command -v git >/dev/null || { apt-get -q update && apt-get -qy install git; }
