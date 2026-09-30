@@ -109,6 +109,8 @@ it as "Ready". About 15 minutes, unattended. Sizes scale to the host (half the C
 of the RAM, within `deck_*` in `vars/apps.yml`).
 
 - `deck-reset`: throw away everything since the last snapshot and start it. Use this every time.
+  It opens full screen (Host+F toggles) and logs straight in; no wizard, no login screen.
+- `deck-create --rebuild`: delete it and make it again, for example after this recipe changes.
 - To update the guest: start it, update inside, then `VBoxManage snapshot deck take "updated <month>"`.
 - The first boot creates it when VirtualBox can run. On a Secure Boot machine that is only
   after the key enrolment above, so the finish note says to run `deck-create` yourself.

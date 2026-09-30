@@ -21,4 +21,10 @@ autoinstall:
     swap:
       size: 0
   updates: security
+  packages:
+    - virtualbox-guest-utils      # screen auto-resize and full screen (Ubuntu's packaged guest additions)
+  late-commands:
+    # A disposable browser: no first-login wizard, no login screen, straight to the desktop.
+    - curtin in-target -- sh -c 'mkdir -p /home/deck/.config && echo yes > /home/deck/.config/gnome-initial-setup-done && chown -R deck:deck /home/deck/.config'
+    - curtin in-target -- sh -c 'printf "[daemon]\nAutomaticLoginEnable=true\nAutomaticLogin=deck\n" > /etc/gdm3/custom.conf'
   shutdown: poweroff

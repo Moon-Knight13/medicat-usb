@@ -3,6 +3,7 @@
 #
 #   deck-create              create the VM, install a minimal Ubuntu + Firefox unattended
 #                            from the golden ISO, then snapshot it as "Ready" (about 15 minutes)
+#   deck-create --rebuild    delete the existing deck (all snapshots) and make it again
 #   deck-reset               throw away everything since the last snapshot and start it
 #
 # Run as your own user (the VM lives in ~/VirtualBox VMs). Sizes come from
@@ -22,7 +23,15 @@ die() { echo "deck-create: $*" >&2; exit 1; }
 command -v VBoxManage >/dev/null || die "VirtualBox is not installed"
 grep -q '^vboxdrv ' /proc/modules || die "the VirtualBox kernel module is not loaded (Secure Boot: enrol the key first, see golden-status)"
 id -nG | grep -qw vboxusers || die "you are not in the vboxusers group yet: log out and back in"
-if VBoxManage showvminfo "$NAME" >/dev/null 2>&1; then echo "$NAME already exists; use deck-reset to start it fresh"; exit 0; fi
+if VBoxManage showvminfo "$NAME" >/dev/null 2>&1; then
+    if [[ "${1:-}" == --rebuild ]]; then
+        echo "Deleting the existing $NAME and its snapshots"
+        VBoxManage controlvm "$NAME" poweroff >/dev/null 2>&1 || true; sleep 2
+        VBoxManage unregistervm "$NAME" --delete >/dev/null
+    else
+        echo "$NAME already exists; use deck-reset to start it fresh, or deck-create --rebuild to make it again"; exit 0
+    fi
+fi
 if [[ ! -f "$ISO" ]]; then
     [[ -n "$ISO_URL" ]] || die "no Ubuntu ISO at $ISO (the install copies it there; or set ISO= in /etc/golden/deck.conf)"
     ISO="$HOME/Downloads/$(basename "$ISO_URL")"
@@ -38,6 +47,8 @@ VBoxManage createmedium disk --filename "$vmdir/$NAME.vdi" --size "$DISK_MB" --f
 VBoxManage storagectl "$NAME" --name SATA --add sata --controller IntelAhci --portcount 1 --bootable on
 VBoxManage storageattach "$NAME" --storagectl SATA --port 0 --device 0 --type hdd --medium "$vmdir/$NAME.vdi"
 VBoxManage storagectl "$NAME" --name IDE --add ide --controller PIIX4
+VBoxManage setextradata "$NAME" GUI/Fullscreen true          # opens full screen; Host+F toggles
+VBoxManage setextradata "$NAME" GUI/ShowMiniToolBar true
 
 # Unattended install: VirtualBox boots the ISO with our own autoinstall (files/deck/user-data:
 # throwaway account deck/deck, minimal desktop which includes Firefox, power off when done).
