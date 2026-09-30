@@ -140,6 +140,13 @@ Fixes tied to one model, applied only when the DMI vendor and product match:
   Realtek one; a WirePlumber drop-in turns UCM off. If the mic sounds harsh, lower
   "Internal Mic Boost" in `alsamixer`. Headset-jack mic under this setup is untested.
 
+### Fingerprint login
+
+When a supported reader is present, `fingerprint: true` lets the lock screen, sudo and polkit
+accept a finger (the password always works too). Enrolling a finger is manual, in Settings >
+System > Users > Fingerprint Login, and the finish note reminds you until one is enrolled. Apply
+any fingerprint-sensor firmware update listed by `golden-status` first.
+
 ### Power profile
 
 `power_profile: performance` in `vars/apps.yml` sets the laptop to performance mode once, at

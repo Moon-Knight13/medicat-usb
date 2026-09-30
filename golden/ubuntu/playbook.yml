@@ -525,6 +525,43 @@
       loop_control:
         label: "{{ item.name }}"
 
+    # ---------------------------------------------------------- fingerprint --
+    - name: Fingerprint reader
+      when: fingerprint
+      block:
+        - name: Is there a supported reader, and is a finger enrolled
+          ansible.builtin.command: fprintd-list {{ golden_user }}
+          register: fprint
+          changed_when: false
+          failed_when: false
+
+        - name: Reader present
+          ansible.builtin.set_fact:
+            fprint_reader: "{{ fprint.rc == 0 and ('found 0 devices' not in fprint.stdout) and ('No devices' not in fprint.stdout) }}"
+
+        - name: Is pam_fprintd already in common-auth
+          ansible.builtin.command: grep -c pam_fprintd /etc/pam.d/common-auth
+          register: pam_before
+          changed_when: false
+          failed_when: false
+
+        - name: Let PAM accept a fingerprint where there is a reader (password stays as fallback)
+          ansible.builtin.command: pam-auth-update --enable fprintd
+          changed_when: pam_before.stdout | default('0') | trim == '0'
+          when: fprint_reader
+
+        - name: Note that a finger still has to be enrolled
+          ansible.builtin.set_fact:
+            golden_todo: "{{ golden_todo + [item] }}"
+          loop:
+            - |-
+              Fingerprint reader found, no finger enrolled yet:
+                Settings > System > Users > Fingerprint Login   (or: fprintd-enroll)
+              If golden-status lists a fingerprint sensor firmware update, apply that first.
+          loop_control:
+            label: fingerprint
+          when: fprint_reader and ('no fingers enrolled' in fprint.stdout)
+
     # ---------------------------------------------------------- secure boot --
     # VirtualBox builds and signs its modules with the machine's MOK, but enrolling that
     # key needs a one-time password and a confirmation at the next boot: nothing unattended

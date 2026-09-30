@@ -53,6 +53,8 @@ apt_packages:
     - fwupd                      # firmware and BIOS updates from LVFS (Framework, Dell, Lenovo, ...)
     - jq
     - wl-clipboard               # clipboard for terminal tools on Wayland (copying out of claude, etc.)
+    - fprintd                    # fingerprint readers (set up below when one is present)
+    - libpam-fprintd
     - unattended-upgrades
   dev:
     - code
@@ -173,6 +175,10 @@ user_groups:
 
 # NVIDIA: installed only when an NVIDIA GPU is detected.
 nvidia_container_toolkit: true
+
+# Fingerprint login: when a supported reader is present, let sudo, polkit and the lock screen
+# accept a finger (password always stays as fallback). Enrolling a finger is done by hand.
+fingerprint: true
 
 # Power profile applied once (a preference): performance | balanced | power-saver | "" (leave).
 # Performance costs battery life on a laptop; chosen anyway. Skipped where the profile is

@@ -39,4 +39,14 @@ if ! { [[ -f "$marker" ]] && grep -qx "$CAVEMAN_VERSION" "$marker"; }; then
     mkdir -p "$HOME/.claude" && echo "$CAVEMAN_VERSION" > "$marker"
     changed=1
 fi
+# caveman's status-line badge: set it when no statusLine is configured yet (never replace one).
+settings="$HOME/.claude/settings.json"; badge="$HOME/.claude/plugins/marketplaces/caveman/src/hooks/caveman-statusline.sh"
+if [[ -f "$badge" ]] && command -v jq >/dev/null; then
+    [[ -f "$settings" ]] || echo '{}' > "$settings"
+    if jq -e '.statusLine == null' "$settings" >/dev/null 2>&1; then
+        tmp=$(mktemp)
+        jq --arg cmd "bash $badge" '.statusLine = {type: "command", command: $cmd}' "$settings" > "$tmp" && mv "$tmp" "$settings"
+        echo "statusLine set to caveman"; changed=1
+    fi
+fi
 [[ $changed -eq 1 ]] && echo "changed" || echo "up to date"
