@@ -24,6 +24,13 @@
           - golden_user | length > 0
         fail_msg: "This playbook targets an Ubuntu machine with a primary user (uid 1000)."
 
+    - name: State directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop: [/var/lib/golden, /etc/golden]
+
     - name: Detect NVIDIA GPU
       ansible.builtin.shell: set -o pipefail; lspci | grep -qi nvidia
       args:
@@ -311,6 +318,21 @@
         - "files/dotfiles/.*"
       when: item | basename != '.keep'
 
+    - name: Claude Code, plugins and caveman for the primary user
+      ansible.builtin.script: files/claude-setup.sh
+      become_user: "{{ golden_user }}"
+      environment:
+        CLAUDE_PLUGINS: "{{ claude_plugins }}"
+      register: claude_setup
+      changed_when: "'changed' in claude_setup.stdout"
+      failed_when: false     # a marketplace or download hiccup should not fail the laptop
+      when: claude_code
+
+    - name: Note that Claude Code needs a sign-in
+      ansible.builtin.set_fact:
+        golden_todo: "{{ golden_todo + ['Claude Code: run  claude  once and sign in (plugins and caveman are installed).'] }}"
+      when: claude_code
+
     - name: VS Code user settings directory
       ansible.builtin.file:
         path: "{{ golden_home }}/.config/Code/User"
@@ -354,6 +376,115 @@
         label: "{{ item.key }}"
       become_user: "{{ golden_user }}"
 
+    # ---------------------------------------------------------- sustainment --
+    - name: Automatic updates
+      when: auto_updates
+      block:
+        - name: Unattended upgrades cover the updates pocket and the third-party repos
+          ansible.builtin.copy:
+            dest: /etc/apt/apt.conf.d/52golden-unattended
+            mode: "0644"
+            content: |
+              // Managed by golden/ubuntu/playbook.yml (auto_update_origins in vars/apps.yml)
+              Unattended-Upgrade::Origins-Pattern {
+              {% for o in auto_update_origins %}
+                  "{{ o }}";
+              {% endfor %}
+              };
+              Unattended-Upgrade::Remove-Unused-Dependencies "true";
+              Unattended-Upgrade::Automatic-Reboot "false";
+              APT::Periodic::Update-Package-Lists "1";
+              APT::Periodic::Unattended-Upgrade "1";
+
+        - name: Daily apt update timers
+          ansible.builtin.systemd_service:
+            name: "{{ item }}"
+            enabled: true
+            state: started
+          loop: [apt-daily.timer, apt-daily-upgrade.timer]
+
+        - name: Weekly Flatpak update units
+          ansible.builtin.copy:
+            dest: "/etc/systemd/system/{{ item.name }}"
+            mode: "0644"
+            content: "{{ item.content }}"
+          loop:
+            - name: golden-flatpak-update.service
+              content: |
+                [Unit]
+                Description=Golden weekly Flatpak update
+                ConditionACPower=true
+                Wants=network-online.target
+                After=network-online.target
+
+                [Service]
+                Type=oneshot
+                Nice=10
+                ExecStart=/usr/bin/flatpak update --system --noninteractive --assumeyes
+            - name: golden-flatpak-update.timer
+              content: |
+                [Unit]
+                Description=Golden weekly Flatpak update
+
+                [Timer]
+                OnCalendar=weekly
+                Persistent=true
+                RandomizedDelaySec=2h
+
+                [Install]
+                WantedBy=timers.target
+          loop_control:
+            label: "{{ item.name }}"
+          notify: Reload systemd
+
+    - name: Weekly re-apply of this playbook from the repo
+      ansible.builtin.copy:
+        dest: "/etc/systemd/system/{{ item.name }}"
+        mode: "0644"
+        content: "{{ item.content }}"
+      loop:
+        - name: golden-converge.service
+          content: |
+            [Unit]
+            Description=Golden weekly converge: re-apply the playbook from the repo (log: /var/log/golden-firstboot.log)
+            ConditionACPower=true
+            Wants=network-online.target
+            After=network-online.target
+
+            [Service]
+            Type=oneshot
+            EnvironmentFile=-/etc/default/golden
+            ExecStart=/usr/local/sbin/golden-firstboot.sh
+        - name: golden-converge.timer
+          content: |
+            [Unit]
+            Description=Golden weekly converge
+
+            [Timer]
+            OnCalendar=weekly
+            Persistent=true
+            RandomizedDelaySec=6h
+
+            [Install]
+            WantedBy=timers.target
+      loop_control:
+        label: "{{ item.name }}"
+      notify: Reload systemd
+
+    - name: Flush handlers so the timers are loaded
+      ansible.builtin.meta: flush_handlers
+
+    - name: Update timers on or off
+      ansible.builtin.systemd_service:
+        name: "{{ item.name }}"
+        enabled: "{{ item.wanted }}"
+        state: "{{ 'started' if item.wanted else 'stopped' }}"
+      loop:
+        - { name: golden-flatpak-update.timer, wanted: "{{ auto_updates }}" }
+        - { name: golden-converge.timer, wanted: "{{ golden_auto_converge }}" }
+      loop_control:
+        label: "{{ item.name }}"
+
     # ---------------------------------------------------------- secure boot --
     # VirtualBox builds and signs its modules with the machine's MOK, but enrolling that
     # key needs a one-time password and a confirmation at the next boot: nothing unattended
@@ -371,12 +502,6 @@
       changed_when: false
       when: "'virtualbox-7.2' in golden_packages"
 
-    - name: State directory
-      ansible.builtin.file:
-        path: /var/lib/golden
-        state: directory
-        mode: "0755"
-
     - name: Note the one-time key enrolment VirtualBox still needs
       ansible.builtin.set_fact:
         golden_todo: "{{ golden_todo + [item] }}"
@@ -388,6 +513,65 @@
       loop_control:
         label: VirtualBox signing key
       when: mok_state.stdout | default('') == 'needs-enrolment'
+
+    # ----------------------------------------------------------------- deck --
+    - name: Disposable browser VM (deck)
+      when: deck_vm
+      block:
+        - name: Deck sizes
+          ansible.builtin.copy:
+            dest: /etc/golden/deck.conf
+            mode: "0644"
+            content: |
+              # Managed by golden/ubuntu/playbook.yml (deck_* in vars/apps.yml). Read by deck-create.
+              CPUS={{ deck_cpus }}
+              MEMORY_MB={{ deck_memory_mb }}
+              MIN_CPUS={{ deck_min_cpus }}
+              MAX_CPUS={{ deck_max_cpus }}
+              MIN_MEMORY_MB={{ deck_min_memory_mb }}
+              MAX_MEMORY_MB={{ deck_max_memory_mb }}
+              DISK_MB={{ deck_disk_mb }}
+              ISO=/opt/golden/ubuntu.iso
+              ISO_URL={{ deck_iso_url }}
+
+        - name: Deck tools
+          ansible.builtin.copy:
+            src: "deck/{{ item }}"
+            dest: "/usr/local/bin/{{ item }}"
+            mode: "0755"
+          loop: [deck-create, deck-reset]
+
+        - name: Does deck exist already, and can VirtualBox run
+          ansible.builtin.shell: |
+            grep -q '^vboxdrv ' /proc/modules || { echo no-module; exit 0; }
+            sudo -u "{{ golden_user }}" VBoxManage showvminfo deck >/dev/null 2>&1 && echo exists || echo missing
+          args:
+            executable: /bin/bash
+          register: deck_state
+          changed_when: false
+
+        - name: Create deck now (unattended guest install, about 15 minutes)
+          ansible.builtin.command: /usr/local/bin/deck-create
+          become_user: "{{ golden_user }}"
+          when: deck_state.stdout == 'missing'
+          register: deck_create
+          changed_when: true
+          failed_when: false
+
+        - name: Why deck is not there yet
+          ansible.builtin.set_fact:
+            deck_why: "{{ ': VirtualBox cannot run until its signing key is enrolled (see above)' if deck_state.stdout == 'no-module' else '' }}"
+
+        - name: Note when deck could not be made yet
+          ansible.builtin.set_fact:
+            golden_todo: "{{ golden_todo + [item] }}"
+          loop:
+            - |-
+              deck (the disposable browser VM) is not made yet{{ deck_why }}.
+              When VirtualBox works:  deck-create   (about 15 minutes, unattended)   then:  deck-reset
+          loop_control:
+            label: deck
+          when: deck_state.stdout == 'no-module' or (deck_create is defined and deck_create.rc | default(0) != 0)
 
     # ------------------------------------------------------------- firmware --
     - name: Firmware updates

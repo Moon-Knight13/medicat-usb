@@ -86,6 +86,41 @@ next playbook run. Everything else (KVM, libvirt, Docker) works with Secure Boot
 - **Sign-ins stay manual** by design: GitHub CLI, Firefox, Discord, Spotify, Steam, Proton
   VPN, Obsidian Sync, Claude Code. Their tokens are the one thing a stick must not carry.
 
+### Claude Code
+
+`claude` (the command-line tool) is installed for your user with the official plugins
+(superpowers, code-review, commit-commands, skill-creator, frontend-design) and the caveman
+plugin, pinned by version and installer checksum in `files/claude-setup.sh`. Run `claude` once
+to sign in. (The VS Code extension is not installed; everything is CLI.)
+
+### deck: a disposable browser VM
+
+For research that should leave no trace on the laptop. `deck-create` builds a VirtualBox VM
+called `deck` (minimal Ubuntu with Firefox, throwaway login `deck`/`deck`, no shared folders
+or clipboard) from the Ubuntu ISO the install kept at `/opt/golden/ubuntu.iso`, then snapshots
+it as "Ready". About 15 minutes, unattended. Sizes scale to the host (half the CPUs, a quarter
+of the RAM, within `deck_*` in `vars/apps.yml`).
+
+- `deck-reset`: throw away everything since the last snapshot and start it. Use this every time.
+- To update the guest: start it, update inside, then `VBoxManage snapshot deck take "updated <month>"`.
+- The first boot creates it when VirtualBox can run. On a Secure Boot machine that is only
+  after the key enrolment above, so the finish note says to run `deck-create` yourself.
+
+### Staying current after deployment
+
+| What | How | When |
+|---|---|---|
+| Ubuntu security and updates, plus the third-party repos (VS Code, Docker, GitHub CLI, Terraform, VirtualBox, Proton) | unattended-upgrades, `auto_update_origins` in `vars/apps.yml` | daily, never reboots by itself |
+| Snaps (Firefox, Spotify, Steam) | snapd | several times a day |
+| Flatpaks (Bambu Studio) | `golden-flatpak-update.timer` | weekly, on mains power |
+| Discord, Obsidian | update themselves | on launch |
+| ClamAV signatures | freshclam | 4 times a day |
+| Firmware and BIOS | fwupd metadata daily; updates listed by `golden-status`, applied by you | daily |
+| This recipe | `golden-converge.timer` re-applies the playbook from the repo (`golden_auto_converge`) | weekly, on mains power |
+
+`golden-status` says when a reboot is pending. A change merged to `main` reaches every laptop
+within a week; set `golden_auto_converge: false` on a laptop you want to pin.
+
 ### Watching the first boot
 
 A "Golden install" terminal window opens at login and lists each step until it finishes (it

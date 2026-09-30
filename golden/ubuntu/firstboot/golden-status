@@ -20,6 +20,7 @@ summary() {
     if [[ -f "$DONE" ]]; then
         echo "Finished $(date -d "$(cat "$DONE")" '+%a %H:%M' 2>/dev/null). Log out and back in to pick up the dock and group changes."
         [[ -f "$TODO" ]] && { echo "Still to do by hand:"; sed 's/^/  /' "$TODO"; }
+        [[ -f /var/run/reboot-required ]] && echo "A reboot is pending (kernel or core update)."
         return 0
     fi
     [[ -r "$LOG" ]] || { echo "Not started yet (it begins a few seconds after boot)."; return 1; }

@@ -1,0 +1,24 @@
+#cloud-config
+# deck: minimal Ubuntu desktop (which includes Firefox) with a throwaway account, installed
+# unattended by deck-create. VirtualBox puts this on its boot medium as the autoinstall.
+autoinstall:
+  version: 1
+  locale: en_GB.UTF-8
+  keyboard:
+    layout: gb
+  timezone: Europe/London
+  source:
+    id: ubuntu-desktop-minimal
+    search_drivers: false
+  identity:
+    hostname: deck
+    username: deck
+    realname: Deck
+    password: "$6$deck$qLKsh.OpDzWRGB3Hq74.xihlHGIMzn.McAF.GhrjjITVcOR2Bxs76LePQzj8iJnqAC348OZRi1hCZ7o.ZSUo70"
+  storage:
+    layout:
+      name: direct
+    swap:
+      size: 0
+  updates: security
+  shutdown: poweroff

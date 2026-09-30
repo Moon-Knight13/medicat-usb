@@ -50,6 +50,8 @@ apt_packages:
     - clamav-daemon
     - wbritish
     - fwupd                      # firmware and BIOS updates from LVFS (Framework, Dell, Lenovo, ...)
+    - jq
+    - unattended-upgrades
   dev:
     - code
     - gh
@@ -57,6 +59,8 @@ apt_packages:
     - terraform
     - ansible
     - ansible-lint
+    - nodejs                     # caveman (Claude plugin) needs Node 18+
+    - npm
     - android-sdk-platform-tools-common
     - adb
   containers_vms:
@@ -91,7 +95,6 @@ flatpaks:
 # VS Code: extensions installed for the primary user; settings.json and keybindings.json come
 # from files/vscode/ (seeded from the current machine; no secrets, sign in to accounts by hand).
 vscode_extensions:
-    - anthropic.claude-code
     - continue.continue
     - hashicorp.terraform
     - ms-azuretools.vscode-containers
@@ -101,6 +104,41 @@ vscode_extensions:
     - ms-vscode.remote-explorer
     - ms-vscode.vscode-chat-customizations-evaluations
     - tomoki1207.pdf
+
+# Claude Code (CLI) for the primary user, with these official plugins and the caveman plugin.
+# Sign in by hand: run `claude` once. Version and installer checksum live in files/claude-setup.sh.
+claude_code: true
+claude_plugins: superpowers code-review commit-commands skill-creator frontend-design
+
+# Keep the laptop current after deployment (all on mains power only where it matters):
+#   apt: security + updates pockets and the third-party repos above, daily, no automatic reboot
+#   flatpak: weekly update; golden: re-apply this playbook from the repo weekly
+auto_updates: true
+auto_update_origins:         # unattended-upgrades Origins-Pattern entries
+  - "o=Ubuntu,a=${distro_codename}-security"
+  - "o=Ubuntu,a=${distro_codename}-updates"
+  - "o=UbuntuESMApps,a=${distro_codename}-apps-security"
+  - "o=Docker"
+  - "o=code stable"
+  - "o=gh"
+  - "o=HashiCorp"
+  - "o=Oracle Corporation"
+  - "o=proton-gitlab"
+golden_auto_converge: true   # weekly: pull the repo's playbook and apply it (off = only golden-update.sh)
+
+# "deck": a disposable browser VM in VirtualBox for research, made once per machine by
+# deck-create (minimal Ubuntu + Firefox from the golden ISO, snapshot "Ready"); deck-reset
+# throws away everything since the snapshot. auto = half the CPUs / a quarter of the RAM,
+# within the floor and cap.
+deck_vm: true
+deck_cpus: auto
+deck_memory_mb: auto
+deck_min_cpus: 2
+deck_max_cpus: 10
+deck_min_memory_mb: 4096
+deck_max_memory_mb: 11010
+deck_disk_mb: 25600
+deck_iso_url: https://releases.ubuntu.com/26.04/ubuntu-26.04.1-desktop-amd64.iso   # fallback if the install did not keep a copy
 
 # Firmware: fwupd refreshes LVFS metadata daily. Available updates are never applied unattended
 # (BIOS updates need mains power and a reboot); the playbook lists them in golden-status instead.
