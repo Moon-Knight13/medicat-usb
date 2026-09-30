@@ -14,7 +14,7 @@ tmpl="$KIT/golden/$name/autoinstall.yaml"
 [[ -f "$tmpl" ]] || { echo "ERROR: $tmpl not found" >&2; exit 1; }
 grep -q '^ *# @GOLDEN_PAYLOAD@$' "$tmpl" || { echo "ERROR: $tmpl has no # @GOLDEN_PAYLOAD@ line" >&2; exit 1; }
 
-payload=$(tar -czf - -C "$KIT/golden" --exclude='autoinstall.yaml' --sort=name --owner=0 --group=0 --mtime='2000-01-01' . | base64 -w 100)
+payload=$(tar -czf - -C "$KIT/golden" --exclude='autoinstall.yaml' --exclude='__pycache__' --sort=name --owner=0 --group=0 --mtime='2000-01-01' . | base64 -w 100)
 while IFS= read -r line; do
     if [[ "$line" =~ ^(\ *)#\ @GOLDEN_PAYLOAD@$ ]]; then
         pad=${BASH_REMATCH[1]}
