@@ -4,6 +4,7 @@
 #   ./make-stick.sh update            fetch latest Ventoy, MediCat and Ubuntu ISO (skips what is current)
 #   ./make-stick.sh list              show USB drives
 #   ./make-stick.sh build /dev/sdX    wipe that USB drive and build the stick (asks for confirmation + sudo)
+#   ./make-stick.sh golden <mount>    refresh only golden/ on a built, mounted stick (no wipe)
 #   ./make-stick.sh status            show what is staged in this folder
 #
 # Options for build:  --skip-test   skip the f3probe counterfeit/health test
@@ -14,6 +15,7 @@
 #   ventoy/                     Ventoy release, extracted
 #   isos/<Folder>/<file>.iso    anything here is copied to the same path on the stick.
 #                               Ubuntu goes in isos/Live_Operating_Systems/Ubuntu/ automatically.
+#   golden/<name>/autoinstall.yaml  unattended install recipe for isos/Live_Operating_Systems/<Name>/*.iso
 #   extra-isos.txt              optional, one "Folder/Sub|URL" per line, downloaded by update
 #   make-stick.conf             repeatable settings (LTS-only, flavour, partition style, stick test)
 #   logs/                       build and update logs
@@ -163,6 +165,54 @@ cmd_list() {
     [[ -n "$(lsblk -dno TRAN | grep usb || true)" ]] || echo "  (none plugged in)"
 }
 
+# ---------------------------------------------------------------- golden ----
+# Copy golden/ onto the stick and register each golden/<name>/autoinstall.yaml
+# with Ventoy's auto_install plugin for the ISOs in isos/Live_Operating_Systems/<Name>/.
+# Ventoy then offers "interactive install" or "golden install" when that ISO is picked.
+install_golden() {
+    local mnt=$1
+    [[ -d "$KIT/golden" ]] || { echo "  (no golden/ folder)"; return; }
+    local as_root=sudo t; [[ -w "$mnt" ]] && as_root=""      # a stick mounted by the desktop is writable as you
+    $as_root rm -rf "$mnt/golden" && $as_root cp -r "$KIT/golden" "$mnt/golden"
+    for t in "$KIT"/golden/*/autoinstall.yaml; do            # pack the folder into each recipe
+        t=$(basename "$(dirname "$t")")
+        "$KIT/tools/golden-pack.sh" "$t" | $as_root tee "$mnt/golden/$t/autoinstall.yaml" >/dev/null
+    done
+    $as_root python3 - "$mnt" "$KIT" <<'PY'
+import json, os, sys, glob
+mnt, kit = sys.argv[1], sys.argv[2]
+cfg_path = os.path.join(mnt, "ventoy", "ventoy.json")
+cfg = json.load(open(cfg_path)) if os.path.exists(cfg_path) else {}
+before = json.dumps(cfg, sort_keys=True)
+auto = [e for e in cfg.get("auto_install", []) if not str(e.get("parent", e.get("image", ""))).startswith("/Live_Operating_Systems/")]
+alias = [e for e in cfg.get("menu_alias", []) if "golden" not in str(e.get("alias", "")).lower()]
+for tmpl in sorted(glob.glob(os.path.join(kit, "golden", "*", "autoinstall.yaml"))):
+    name = os.path.basename(os.path.dirname(tmpl))            # e.g. ubuntu
+    folder = os.path.join(mnt, "Live_Operating_Systems", name.capitalize())
+    isos = sorted(glob.glob(os.path.join(folder, "*.iso")))
+    if not isos:
+        print(f"  golden/{name}: no ISO under Live_Operating_Systems/{name.capitalize()}, skipped"); continue
+    auto.append({"parent": f"/Live_Operating_Systems/{name.capitalize()}",
+                 "template": [f"/golden/{name}/autoinstall.yaml"], "timeout": 15})
+    for iso in isos:
+        rel = "/Live_Operating_Systems/" + name.capitalize() + "/" + os.path.basename(iso)
+        alias.append({"image": rel, "alias": f"{name.capitalize()} {os.path.basename(iso).split('-')[1]} (golden install available)"})
+    print(f"  golden/{name}: registered for {len(isos)} ISO(s)")
+cfg["auto_install"], cfg["menu_alias"] = auto, alias
+if json.dumps(cfg, sort_keys=True) != before:      # untouched when a refresh changes nothing
+    os.makedirs(os.path.dirname(cfg_path), exist_ok=True)
+    json.dump(cfg, open(cfg_path, "w"), indent=2)
+PY
+}
+
+# Refresh only the golden installs on a stick that is already built and mounted.
+cmd_golden() {
+    local mnt=${1:-}
+    [[ -d "$mnt/ventoy" ]] || die "usage: $0 golden <mount point of the stick's Medicat partition>"
+    install_golden "$mnt"; sync
+    echo "Done. Unmount the stick before removing it."
+}
+
 # ----------------------------------------------------------------- build ----
 cmd_build() {
     local dev="" skip_test=0 gpt=""
@@ -199,7 +249,8 @@ cmd_build() {
     sudo -v
     ( while true; do sleep 60; sudo -n true 2>/dev/null || exit; done ) &   # keep sudo alive during the long extract
     local keepalive=$!
-    trap 'kill $keepalive 2>/dev/null || true' EXIT
+    # shellcheck disable=SC2064  # expand now: keepalive is local and out of scope when EXIT fires
+    trap "kill $keepalive 2>/dev/null || true" EXIT
 
     sudo umount "$dev"* 2>/dev/null || true
 
@@ -233,12 +284,15 @@ cmd_build() {
     c_info "== [4/5] Extract $(basename "$archive") (20-40 minutes) =="
     sudo 7z x -y -bsp1 -bso0 -o"$mnt" "$archive"
 
-    c_info "== [5/5] Copy ISOs from isos/ =="
+    c_info "== [5/6] Copy ISOs from isos/ =="
     if [[ -n "$(find "$ISOS" -type f | head -1)" ]]; then
         sudo cp -av "$ISOS"/. "$mnt"/
     else
         echo "  (isos/ is empty)"
     fi
+
+    c_info "== [6/6] Golden installs (golden/) =="
+    install_golden "$mnt"
     sync
     df -h "$mnt" | tail -1
     sudo umount "$mnt"; sync; sleep 2
@@ -250,7 +304,8 @@ cmd_build() {
 case "${1:-}" in
     update) shift; cmd_update "$@" ;;
     build)  shift; cmd_build "$@" ;;
+    golden) shift; cmd_golden "$@" ;;
     list)   cmd_list ;;
     status) cmd_status ;;
-    *) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+    *) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

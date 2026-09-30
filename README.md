@@ -63,6 +63,13 @@ Edit the file to change the defaults for the repo, or set the same name as an en
 variable for a one-off run, e.g. `UBUNTU_LTS_ONLY=0 ./make-stick.sh update`. The build
 flags `--gpt`, `--mbr` and `--skip-test` override the file for a single build.
 
+## Golden installs
+
+`golden/ubuntu/` turns the Ubuntu ISO into a wipe-and-encrypt install that ends with your
+favourite apps and settings, applied by Ansible at first boot. Only the identity and disk
+pages are answered at the laptop, so no secrets live on the stick or in this repo. See
+[golden/README.md](golden/README.md).
+
 ## Adding your own ISOs
 
 Drop files anywhere under `isos/`; the tree is copied to the stick as-is and Ventoy lists
@@ -77,7 +84,9 @@ git-ignored.
 | `make-stick.sh` | the tool: `update`, `list`, `build`, `status` |
 | `make-stick.conf` | repeatable settings, committed |
 | `extra-isos.txt` | extra downloads for `update`, committed |
+| `golden/<name>/` | unattended install recipes; `build` registers them in the Ventoy menu |
 | `tools/hwtest.sh` | deeper write/read-back test for a suspect stick: `sudo tools/hwtest.sh /dev/sdX` |
+| `tools/vm-test.sh` | boot the ISO with a golden recipe, or the real stick, in a KVM virtual machine |
 | `MediCat.USB.<ver>.7z`, `ventoy/`, `isos/`, `logs/` | fetched or generated locally, git-ignored |
 
 ## Licensing

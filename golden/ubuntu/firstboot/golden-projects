@@ -1,0 +1,46 @@
+#!/usr/bin/env python3
+"""Clone the repositories listed under `projects:` in the golden local.yml into ~/Documents.
+
+    golden-projects            clone whatever is missing (safe to repeat; never touches existing clones)
+
+Run it again after `gh auth login` or after this machine's SSH key has been added to GitHub
+and your servers: private and ssh:// repositories only work then. Exit status is the number
+of repositories still missing.
+"""
+import os
+import subprocess
+import sys
+
+import yaml
+
+LOCAL = "/opt/golden/ubuntu/vars/local.yml"
+BASE = os.path.expanduser("~/Documents")
+
+try:
+    with open(LOCAL) as f:
+        projects = yaml.safe_load(f).get("projects") or []
+except (OSError, AttributeError):
+    projects = []
+
+missing = 0
+for entry in projects:
+    if isinstance(entry, dict):
+        (dest, url), = entry.items()
+    else:
+        url = entry
+        dest = os.path.basename(url.rstrip("/")).removesuffix(".git")
+    path = os.path.join(BASE, dest)
+    if os.path.isdir(os.path.join(path, ".git")):
+        continue
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_SSH_COMMAND="ssh -o BatchMode=yes")
+    r = subprocess.run(["git", "clone", "--quiet", url, path], env=env, capture_output=True, text=True)
+    if r.returncode == 0:
+        print(f"cloned {url} -> {path}")
+    else:
+        missing += 1
+        reason = r.stderr.strip().splitlines()[-1] if r.stderr.strip() else "failed"
+        print(f"not yet: {url} -> {path}  ({reason})")
+if missing:
+    print(f"{missing} repositories still to clone; run golden-projects again once access is set up.")
+sys.exit(missing)

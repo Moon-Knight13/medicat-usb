@@ -1,0 +1,51 @@
+#cloud-config
+# Golden Ubuntu install, served by Ventoy's auto_install plugin from the MediCat stick.
+#
+# Two pages stay interactive so no secret is ever stored on the stick or in git:
+#   identity  - you type your name, username and password
+#   storage   - you choose "Erase disk" and tick "Encrypt with LUKS", then set the passphrase
+# Everything else is unattended. At first boot, golden-firstboot.service runs the
+# Ansible playbook in this folder (see playbook.yml) to install your apps and settings.
+autoinstall:
+  version: 1
+  interactive-sections:
+    - identity
+    - storage
+
+  locale: en_GB.UTF-8
+  keyboard:
+    layout: gb
+  timezone: Europe/London
+
+  source:
+    id: ubuntu-desktop          # full desktop; use ubuntu-desktop-minimal for a slimmer base
+    search_drivers: true
+  drivers:
+    install: true               # proprietary drivers (e.g. NVIDIA) where the hardware needs them
+  codecs:
+    install: true
+  updates: security
+
+  # No `packages:` here on purpose. They are not on the ISO, so the installer would need a
+  # network it may not have (the Wi-Fi page is skipped) and would fail. The first boot
+  # installs what it needs (git, ansible) once the laptop is online.
+
+  late-commands:
+    # Carry the golden folder onto the installed system, so first boot can run without
+    # GitHub. It travels inside this file: tools/golden-pack.sh replaces the next line with
+    # a command that unpacks it to /opt/golden. It cannot be read from the stick, because
+    # Ventoy holds the partition while the ISO is booted. make-stick.sh does the packing.
+    # @GOLDEN_PAYLOAD@
+    # Install and arm the first-boot unit (runs ansible-pull with retries until it succeeds).
+    - install -m 0755 /target/opt/golden/ubuntu/firstboot/golden-firstboot.sh /target/usr/local/sbin/golden-firstboot.sh
+    - install -m 0644 /target/opt/golden/ubuntu/firstboot/golden-firstboot.service /target/etc/systemd/system/golden-firstboot.service
+    - curtin in-target -- systemctl enable golden-firstboot.service
+    # Progress window at login until the first boot has finished; `golden-status` any time.
+    - install -m 0755 /target/opt/golden/ubuntu/firstboot/golden-status /target/usr/local/bin/golden-status
+    - install -D -m 0644 /target/opt/golden/ubuntu/firstboot/golden-status.desktop /target/etc/xdg/autostart/golden-status.desktop
+    - install -m 0755 /target/opt/golden/ubuntu/firstboot/golden-projects /target/usr/local/bin/golden-projects
+    # Keep a copy of this ISO for deck-create (the disposable browser VM). /cdrom is the
+    # install medium: the ISO mapped by Ventoy on the stick, or the DVD in a VM.
+    - cp "$(findmnt -no SOURCE /cdrom)" /target/opt/golden/ubuntu.iso && chmod 0644 /target/opt/golden/ubuntu.iso || rm -f /target/opt/golden/ubuntu.iso
+
+  shutdown: reboot

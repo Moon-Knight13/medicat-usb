@@ -1,0 +1,206 @@
+---
+# Your favoured applications and settings. Seeded from the current machine on
+# 2026-09-28; prune or extend freely. Everything here is applied by playbook.yml,
+# both at first boot after a golden install and any time you re-run it:
+#   sudo ansible-pull -U https://github.com/Moon-Knight13/medicat-usb.git golden/ubuntu/playbook.yml
+
+# Third-party apt repositories (deb822 format, key pinned per repo).
+apt_repos:
+  - name: docker
+    key_url: https://download.docker.com/linux/ubuntu/gpg
+    uri: https://download.docker.com/linux/ubuntu
+    suites: "{{ ansible_facts['distribution_release'] }}"
+    components: stable
+  - name: github-cli
+    key_url: https://cli.github.com/packages/githubcli-archive-keyring.gpg
+    uri: https://cli.github.com/packages
+    suites: stable
+    components: main
+  - name: hashicorp
+    key_url: https://apt.releases.hashicorp.com/gpg
+    uri: https://apt.releases.hashicorp.com
+    suites: "{{ ansible_facts['distribution_release'] }}"
+    components: main
+  - name: vscode
+    key_url: https://packages.microsoft.com/keys/microsoft.asc
+    uri: https://packages.microsoft.com/repos/code
+    suites: stable
+    components: main
+  - name: virtualbox
+    key_url: https://www.virtualbox.org/download/oracle_vbox_2016.asc
+    uri: https://download.virtualbox.org/virtualbox/debian
+    suites: "{{ ansible_facts['distribution_release'] }}"
+    components: contrib
+
+# apt packages, grouped so a group is easy to drop.
+apt_packages:
+  base:
+    - build-essential
+    - curl
+    - git
+    - gnupg
+    - net-tools
+    - bridge-utils
+    - aria2
+    - p7zip-full
+    - f3
+    - efibootmgr
+    - openconnect
+    - network-manager-openconnect-gnome   # VPN entries in the panel menu (`vpns:` in vars/local.yml)
+    - clamav
+    - clamav-daemon
+    - wbritish
+    - fwupd                      # firmware and BIOS updates from LVFS (Framework, Dell, Lenovo, ...)
+    - jq
+    - wl-clipboard               # clipboard for terminal tools on Wayland (copying out of claude, etc.)
+    - fprintd                    # fingerprint readers (set up below when one is present)
+    - libpam-fprintd
+    - unattended-upgrades
+  dev:
+    - code
+    - gh
+    - golang-go
+    - terraform
+    - ansible
+    - ansible-lint
+    - nodejs                     # caveman (Claude plugin) needs Node 18+
+    - npm
+    - android-sdk-platform-tools-common
+    - adb
+  containers_vms:
+    - docker-ce
+    - docker-ce-cli
+    - containerd.io
+    - docker-buildx-plugin
+    - docker-compose-plugin
+    - qemu-system-x86
+    - libvirt-daemon-system
+    - libvirt-clients
+    - virtualbox-7.2
+  desktop:
+    - flatpak
+    - gnome-software-plugin-flatpak
+    - gnome-shell-extension-appindicator
+
+# Packages shipped as .deb downloads rather than repos.
+deb_urls:
+  - https://discord.com/api/download?platform=linux&format=deb
+  - https://github.com/obsidianmd/obsidian-releases/releases/latest/download/obsidian_amd64.deb   # resolved by the task to the real asset
+
+snaps:
+  - firefox
+  - spotify
+  - steam
+  - kolourpaint
+
+flatpaks:
+  - com.bambulab.BambuStudio
+
+# VS Code: extensions installed for the primary user; settings.json and keybindings.json come
+# from files/vscode/ (seeded from the current machine; no secrets, sign in to accounts by hand).
+vscode_extensions:
+    - continue.continue
+    - hashicorp.terraform
+    - ms-azuretools.vscode-containers
+    - ms-vscode-remote.remote-containers
+    - ms-vscode-remote.remote-ssh
+    - ms-vscode-remote.remote-ssh-edit
+    - ms-vscode.remote-explorer
+    - ms-vscode.vscode-chat-customizations-evaluations
+    - tomoki1207.pdf
+
+# Claude Code (CLI) for the primary user, with these official plugins and the caveman plugin.
+# Sign in by hand: run `claude` once. Version and installer checksum live in files/claude-setup.sh.
+claude_code: true
+claude_plugins: superpowers code-review commit-commands skill-creator frontend-design
+
+# Keep the laptop current after deployment (all on mains power only where it matters):
+#   apt: security + updates pockets and the third-party repos above, daily, no automatic reboot
+#   flatpak: weekly update. The recipe itself changes only when you run golden-update.sh.
+auto_updates: true
+auto_update_origins:         # unattended-upgrades Origins-Pattern entries
+  - "o=Ubuntu,a=${distro_codename}-security"
+  - "o=Ubuntu,a=${distro_codename}-updates"
+  - "o=UbuntuESMApps,a=${distro_codename}-apps-security"
+  - "o=Docker"
+  - "o=code stable"
+  - "o=gh"
+  - "o=HashiCorp"
+  - "o=Oracle Corporation"
+  - "o=proton-gitlab"
+
+# "deck": a disposable browser VM in VirtualBox for research, made once per machine by
+# deck-create (minimal Ubuntu + Firefox from the golden ISO, snapshot "Ready"); deck-reset
+# throws away everything since the snapshot. auto = half the CPUs / a quarter of the RAM,
+# within the floor and cap.
+deck_vm: true
+deck_cpus: auto
+deck_memory_mb: auto
+deck_min_cpus: 2
+deck_max_cpus: 10
+deck_min_memory_mb: 4096
+deck_max_memory_mb: 11010
+deck_disk_mb: 25600
+deck_iso_url: https://releases.ubuntu.com/26.04/ubuntu-26.04.1-desktop-amd64.iso   # fallback if the install did not keep a copy
+
+# Firmware: fwupd refreshes LVFS metadata daily. Available updates are never applied unattended
+# (BIOS updates need mains power and a reboot); the playbook lists them in golden-status instead.
+firmware_check: true
+
+# Proton VPN ships its own repo via a .deb; installed only if enabled.
+protonvpn: true
+
+# ClamAV, tuned for a laptop: signatures stay current, the scanner costs nothing while idle.
+# clamd holds about 1 GB of RAM once loaded, so it is started on demand (socket activation)
+# by clamdscan or the weekly scan, and stopped again when the weekly scan finishes.
+clamav_checks_per_day: 4            # freshclam polls; upstream publishes about once a day
+clamav_weekly_scan: true            # low-priority scan, mains power only, catches up if missed
+clamav_scan_paths:
+  - /home
+clamav_exclude_paths:               # regexes; big, churny or machine-generated trees
+  - ^/home/[^/]+/\.cache/
+  - ^/home/[^/]+/\.local/share/Steam/
+  - ^/home/[^/]+/snap/steam/
+  - ^/home/[^/]+/VirtualBox.VMs/
+  - ^/home/[^/]+/\.local/share/containers/
+  - ^/home/[^/]+/\.var/app/[^/]+/cache/
+  - ^/home/[^/]+/Documents/my_notes/      # personal notes; sensitive text, false alarms not wanted
+
+# Extra groups for the primary user.
+user_groups:
+  - docker
+  - libvirt
+  - kvm
+  - vboxusers
+
+# NVIDIA: installed only when an NVIDIA GPU is detected.
+nvidia_container_toolkit: true
+
+# Fingerprint login: when a supported reader is present, let sudo, polkit and the lock screen
+# accept a finger (password always stays as fallback). Enrolling a finger is done by hand.
+fingerprint: true
+
+# Power profile applied once (a preference): performance | balanced | power-saver | "" (leave).
+# Performance costs battery life on a laptop; chosen anyway. Skipped where the profile is
+# not offered or power-profiles-daemon is absent.
+power_profile: performance
+
+# GNOME settings (dconf), loaded as the primary user.
+dconf_settings:
+  "/org/gnome/desktop/interface/color-scheme": "'prefer-dark'"
+  "/org/gnome/desktop/input-sources/sources": "[('xkb', 'gb')]"
+  "/org/gnome/desktop/peripherals/keyboard/numlock-state": "true"
+  "/org/gnome/desktop/peripherals/touchpad/click-method": "'areas'"   # bottom-right press = right-click (Framework)
+  "/org/gnome/desktop/session/idle-delay": "uint32 0"
+  "/org/gnome/nautilus/preferences/default-folder-viewer": "'list-view'"
+  "/org/gnome/nautilus/preferences/search-filter-time-type": "'last_modified'"
+  "/org/gnome/nautilus/icon-view/default-zoom-level": "'medium'"
+  "/org/gtk/settings/file-chooser/sort-directories-first": "true"
+  "/org/gtk/gtk4/settings/file-chooser/sort-directories-first": "true"
+  "/org/gtk/gtk4/settings/file-chooser/view-type": "'list'"
+  "/org/gnome/settings-daemon/plugins/power/sleep-inactive-ac-type": "'nothing'"
+  "/org/gnome/settings-daemon/plugins/power/sleep-inactive-ac-timeout": "3600"
+  "/org/gnome/shell/favorite-apps": "['firefox_firefox.desktop', 'org.gnome.Nautilus.desktop', 'org.gnome.Ptyxis.desktop', 'com.microsoft.VSCode.desktop', 'md.obsidian.Obsidian.desktop', 'spotify_spotify.desktop', 'discord.desktop']"
+
+# Proton VPN publishes its repo as a versioned .deb; bump when they do.
+protonvpn_release_deb: https://repo.protonvpn.com/debian/dists/stable/main/binary-all/protonvpn-stable-release_1.0.8_all.deb

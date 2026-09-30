@@ -1,0 +1,790 @@
+---
+# Golden Ubuntu playbook: installs your favoured apps and settings on this machine.
+# Runs at first boot after a golden install (golden-firstboot.service), and can be
+# re-run at any time to converge a laptop back to this state:
+#   sudo ansible-pull -U https://github.com/Moon-Knight13/medicat-usb.git golden/ubuntu/playbook.yml
+# Or push it to remote machines from your desk with an inventory:
+#   ansible-playbook -i laptops.ini -e target=laptops golden/ubuntu/playbook.yml
+- name: Golden Ubuntu
+  hosts: "{{ target | default('localhost') }}"
+  become: true
+  vars_files:
+    - vars/apps.yml
+    - "{{ lookup('first_found', ['vars/local.yml', 'vars/local.defaults.yml']) }}"
+  vars:
+    golden_todo: []            # steps nothing unattended can do; shown by golden-status when finished
+    golden_user: "{{ lookup('pipe', 'getent passwd 1000 | cut -d: -f1') }}"
+    golden_home: "/home/{{ golden_user }}"
+    golden_uid: "{{ lookup('pipe', 'getent passwd 1000 | cut -d: -f3') }}"
+
+  pre_tasks:
+    - name: Sanity checks
+      ansible.builtin.assert:
+        that:
+          - ansible_facts['distribution'] == "Ubuntu"
+          - golden_user | length > 0
+        fail_msg: "This playbook targets an Ubuntu machine with a primary user (uid 1000)."
+
+    # Personal preferences (desktop settings, VS Code, git and ssh config, dotfiles) are applied
+    # once, at first boot, and then left alone so changes made on the laptop stick. A later
+    # update manages everything else. golden-update.sh --preferences re-applies them.
+    - name: Have the preferences been applied before
+      ansible.builtin.stat:
+        path: /var/lib/golden/preferences-applied
+      register: prefs_marker
+
+    - name: Apply preferences on this run
+      ansible.builtin.set_fact:
+        apply_prefs: "{{ (not prefs_marker.stat.exists) or (force_preferences | default(false) | bool) }}"
+
+    - name: State directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop: [/var/lib/golden, /etc/golden]
+
+    - name: Detect NVIDIA GPU
+      ansible.builtin.shell: set -o pipefail; lspci | grep -qi nvidia
+      args:
+        executable: /bin/bash
+      register: nvidia_gpu
+      changed_when: false
+      failed_when: false
+
+  tasks:
+    # ---------------------------------------------------------------- repos --
+    - name: Third-party apt repositories (deb822, key pinned per repo)
+      ansible.builtin.deb822_repository:
+        name: "{{ item.name }}"
+        uris: "{{ item.uri }}"
+        suites: "{{ item.suites }}"
+        components: "{{ item.components }}"
+        signed_by: "{{ item.key_url }}"
+        state: present
+      loop: "{{ apt_repos }}"
+      loop_control:
+        label: "{{ item.name }}"
+      notify: Apt update
+
+    - name: NVIDIA container toolkit repository
+      ansible.builtin.deb822_repository:
+        name: nvidia-container-toolkit
+        uris: https://nvidia.github.io/libnvidia-container/stable/deb/$(ARCH)
+        suites: "/"
+        signed_by: https://nvidia.github.io/libnvidia-container/gpgkey
+        state: present
+      when: nvidia_gpu.rc == 0 and nvidia_container_toolkit
+      notify: Apt update
+
+    - name: Proton VPN repository package
+      when: protonvpn
+      block:
+        - name: Download Proton VPN repo .deb
+          ansible.builtin.get_url:
+            url: "{{ protonvpn_release_deb }}"
+            dest: /tmp/protonvpn-stable-release.deb
+            mode: "0644"
+        - name: Install Proton VPN repo .deb
+          ansible.builtin.apt:
+            deb: /tmp/protonvpn-stable-release.deb
+          notify: Apt update
+
+    - name: Flush handlers so new repos are usable
+      ansible.builtin.meta: flush_handlers
+
+    # ------------------------------------------------------------- packages --
+    - name: Build the package list
+      ansible.builtin.set_fact:
+        golden_packages: >-
+          {{ apt_packages.values() | flatten
+             + (['proton-vpn-gnome-desktop'] if protonvpn else [])
+             + (['nvidia-container-toolkit'] if (nvidia_gpu.rc == 0 and nvidia_container_toolkit) else []) }}
+
+    - name: Apt packages
+      ansible.builtin.apt:
+        name: "{{ golden_packages }}"
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+      notify: Restart libvirt   # its first start during package install predates the libvirt-qemu user
+
+    # Not /releases/latest: that can be a mobile-only release with no .deb attached.
+    # Discord and Obsidian update themselves once installed, so only the first install
+    # goes through here; that also keeps the run idempotent.
+    - name: Installed packages
+      ansible.builtin.package_facts:
+
+    - name: Resolve Obsidian's newest .deb URL
+      ansible.builtin.uri:
+        url: https://api.github.com/repos/obsidianmd/obsidian-releases/releases?per_page=30
+        return_content: true
+      register: obsidian_releases
+      changed_when: false
+      when: "'obsidian' not in ansible_facts.packages"
+
+    - name: Pick the newest Obsidian release that ships an amd64 .deb
+      ansible.builtin.set_fact:
+        obsidian_deb_url: >-
+          {{ obsidian_releases.json | map(attribute='assets') | flatten
+             | selectattr('name', 'search', 'amd64[.]deb$')
+             | map(attribute='browser_download_url') | first }}
+      when: "'obsidian' not in ansible_facts.packages"
+
+    - name: Download .deb packages
+      ansible.builtin.get_url:
+        url: "{{ item.url }}"
+        dest: "/tmp/{{ item.name }}.deb"
+        mode: "0644"
+      loop:
+        - { name: discord, url: "https://discord.com/api/download?platform=linux&format=deb" }
+        - { name: obsidian, url: "{{ obsidian_deb_url | default('') }}" }
+      loop_control:
+        label: "{{ item.name }}"
+      when: item.name not in ansible_facts.packages
+
+    - name: Install .deb packages
+      ansible.builtin.apt:
+        deb: "/tmp/{{ item }}.deb"
+      loop: [discord, obsidian]
+      when: item not in ansible_facts.packages
+
+    # --------------------------------------------------------------- clamav --
+    - name: ClamAV signature update frequency
+      ansible.builtin.lineinfile:
+        path: /etc/clamav/freshclam.conf
+        regexp: '^Checks\s'
+        line: "Checks {{ clamav_checks_per_day }}"
+      notify: Restart freshclam
+
+    # clamd is not always running and re-reads its databases itself (SelfCheck).
+    - name: ClamAV updater does not try to notify an on-demand scanner
+      ansible.builtin.lineinfile:
+        path: /etc/clamav/freshclam.conf
+        regexp: '^NotifyClamd\s'
+        state: absent
+      notify: Restart freshclam
+
+    - name: ClamAV scanner settings
+      ansible.builtin.blockinfile:
+        path: /etc/clamav/clamd.conf
+        marker: "# {mark} golden"
+        block: |
+          ConcurrentDatabaseReload no
+          MaxThreads 4
+          {% for path in clamav_exclude_paths %}
+          ExcludePath {{ path }}
+          {% endfor %}
+      notify: Stop clamd
+
+    - name: ClamAV scanner runs at the lowest CPU and disk priority
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/clamav-daemon.service.d/golden.conf
+        mode: "0644"
+        content: |
+          [Service]
+          Nice=19
+          IOSchedulingClass=idle
+          CPUWeight=20
+      notify: Stop clamd
+
+    - name: ClamAV weekly scan units
+      ansible.builtin.copy:
+        dest: "/etc/systemd/system/{{ item.name }}"
+        mode: "0644"
+        content: "{{ item.content }}"
+      loop:
+        - name: golden-clamscan.service
+          content: |
+            [Unit]
+            Description=Golden weekly ClamAV scan (log: /var/log/clamav/golden-scan.log)
+            ConditionACPower=true
+
+            [Service]
+            Type=oneshot
+            Nice=19
+            IOSchedulingClass=idle
+            ExecStart=/usr/bin/clamdscan --fdpass --multiscan --infected --log=/var/log/clamav/golden-scan.log {{ clamav_scan_paths | join(' ') }}
+            ExecStopPost=/usr/bin/systemctl stop clamav-daemon.service
+        - name: golden-clamscan.timer
+          content: |
+            [Unit]
+            Description=Golden weekly ClamAV scan
+
+            [Timer]
+            OnCalendar=weekly
+            Persistent=true
+            RandomizedDelaySec=1h
+
+            [Install]
+            WantedBy=timers.target
+      loop_control:
+        label: "{{ item.name }}"
+      notify: Reload systemd
+
+    - name: Flush handlers so the ClamAV units are loaded
+      ansible.builtin.meta: flush_handlers
+
+    - name: ClamAV updater runs, scanner starts on demand only
+      ansible.builtin.systemd_service:
+        name: "{{ item.name }}"
+        enabled: "{{ item.enabled }}"
+        state: "{{ item.state }}"
+      loop:
+        - { name: clamav-freshclam.service, enabled: true, state: started }
+        # Service first: disabling it also disables the socket (Also=), which is then re-enabled.
+        - { name: clamav-daemon.service, enabled: false, state: stopped }
+        - { name: clamav-daemon.socket, enabled: true, state: started }
+        - { name: golden-clamscan.timer, enabled: "{{ clamav_weekly_scan }}", state: "{{ 'started' if clamav_weekly_scan else 'stopped' }}" }
+      loop_control:
+        label: "{{ item.name }}"
+
+    # ----------------------------------------------------------------- user --
+    - name: Groups that exist on this machine
+      ansible.builtin.shell: "set -o pipefail; getent group {{ user_groups | join(' ') }} | cut -d: -f1"
+      args:
+        executable: /bin/bash
+      register: existing_groups
+      changed_when: false
+      failed_when: existing_groups.rc not in [0, 2]   # getent exits 2 when any of the groups is absent
+
+    - name: Add the primary user to those groups
+      ansible.builtin.user:
+        name: "{{ golden_user }}"
+        groups: "{{ existing_groups.stdout_lines }}"
+        append: true
+
+    - name: Git identity (from vars/local.yml; git asks for an email if none is set)
+      ansible.builtin.template:
+        src: templates/gitconfig.j2
+        dest: "{{ golden_home }}/.gitconfig"
+        owner: "{{ golden_user }}"
+        group: "{{ golden_user }}"
+        mode: "0644"
+
+    # SSH: one new key per machine (never carried between machines). The config in local/
+    # (ssh_config, on the stick only) can reference it as ~/.ssh/id_ed25519.
+      when: apply_prefs
+
+    - name: SSH key for this machine
+      ansible.builtin.user:
+        name: "{{ golden_user }}"
+        generate_ssh_key: true
+        ssh_key_type: ed25519
+        ssh_key_file: .ssh/id_ed25519
+        ssh_key_comment: "{{ golden_user }}@{{ ansible_facts['hostname'] }}"
+
+    - name: Carried SSH config, if the stick has one
+      ansible.builtin.copy:
+        src: local/ssh_config
+        dest: "{{ golden_home }}/.ssh/config"
+        owner: "{{ golden_user }}"
+        group: "{{ golden_user }}"
+        mode: "0600"
+      when: apply_prefs and (lookup('ansible.builtin.fileglob', 'local/ssh_config') | length > 0)
+
+    - name: This machine's public key
+      ansible.builtin.slurp:
+        src: "{{ golden_home }}/.ssh/id_ed25519.pub"
+      register: ssh_pub
+
+    - name: Note where the new key still has to be added
+      ansible.builtin.set_fact:
+        golden_todo: "{{ golden_todo + [item] }}"
+      loop:
+        - |-
+          Sign in and authorise this machine's new SSH key (nothing is carried between machines):
+            {{ ssh_pub.content | b64decode | trim }}
+            gh auth login                                  (GitHub, also used by git over https)
+            gh ssh-key add ~/.ssh/id_ed25519.pub -t "$(hostname)"
+            ssh-copy-id <host>                             (each server in ~/.ssh/config)
+      loop_control:
+        label: ssh key
+
+    # VPNs from vars/local.yml: appear in the panel menu; you switch one on and authenticate.
+    - name: VPN connections (OpenConnect / AnyConnect)
+      ansible.builtin.template:
+        src: nm-openconnect.nmconnection.j2
+        dest: "/etc/NetworkManager/system-connections/{{ item.name }}.nmconnection"
+        mode: "0600"
+      loop: "{{ vpns | default([]) }}"
+      loop_control:
+        label: "{{ item.name }}"
+      notify: Reload NetworkManager connections
+
+    - name: Projects (public repositories now; private and ssh ones after the key is authorised)
+      ansible.builtin.command: /usr/local/bin/golden-projects
+      become_user: "{{ golden_user }}"
+      register: projects_result
+      changed_when: "'cloned ' in projects_result.stdout"
+      failed_when: false
+      when: projects | default([]) | length > 0
+
+    - name: Note the projects still to clone
+      ansible.builtin.set_fact:
+        golden_todo: "{{ golden_todo + [item] }}"
+      loop:
+        - |-
+          Repositories that need access first (see above), then:  golden-projects
+          {% for line in projects_result.stdout_lines | select('search', '^not yet:') %}
+            {{ line | regex_replace('^not yet: (\S+).*', '\1') }}
+          {% endfor %}
+      loop_control:
+        label: projects
+      when: projects_result is defined and projects_result.rc | default(0) != 0
+
+    - name: Dotfiles
+      ansible.builtin.copy:
+        src: "{{ item }}"
+        dest: "{{ golden_home }}/{{ item | basename }}"
+        owner: "{{ golden_user }}"
+        group: "{{ golden_user }}"
+        mode: "0644"
+      with_fileglob:
+        - "files/dotfiles/.*"
+      when: apply_prefs and (item | basename != '.keep')
+
+    - name: Claude Code, plugins and caveman for the primary user
+      ansible.builtin.script: files/claude-setup.sh
+      become_user: "{{ golden_user }}"
+      environment:
+        CLAUDE_PLUGINS: "{{ claude_plugins }}"
+      register: claude_setup
+      changed_when: "'changed' in claude_setup.stdout"
+      failed_when: false     # a marketplace or download hiccup should not fail the laptop
+      when: claude_code
+
+    - name: Note that Claude Code needs a sign-in
+      ansible.builtin.set_fact:
+        golden_todo: "{{ golden_todo + ['Claude Code: run  claude  once and sign in (plugins and caveman are installed).'] }}"
+      when: claude_code
+
+    - name: VS Code user settings directory
+      ansible.builtin.file:
+        path: "{{ golden_home }}/.config/Code/User"
+        state: directory
+        owner: "{{ golden_user }}"
+        group: "{{ golden_user }}"
+        mode: "0755"
+
+    - name: VS Code settings and keybindings
+      ansible.builtin.copy:
+        src: "vscode/{{ item }}"
+        dest: "{{ golden_home }}/.config/Code/User/{{ item }}"
+        owner: "{{ golden_user }}"
+        group: "{{ golden_user }}"
+        mode: "0644"
+      loop: [settings.json, keybindings.json]
+      when: apply_prefs
+
+    - name: VS Code extensions already installed
+      ansible.builtin.command: code --list-extensions
+      become_user: "{{ golden_user }}"
+      register: code_extensions
+      changed_when: false
+      failed_when: false
+
+    - name: VS Code extensions
+      ansible.builtin.command: code --install-extension {{ item }}
+      become_user: "{{ golden_user }}"
+      loop: "{{ vscode_extensions }}"
+      when: item | lower not in (code_extensions.stdout | lower)
+      register: code_install
+      changed_when: "'successfully installed' in code_install.stdout | lower"
+      failed_when: false   # a marketplace hiccup should not fail the laptop; the next run retries
+
+    - name: Power profile (once; power-profiles-daemon remembers it across reboots)
+      ansible.builtin.shell: |
+        set -o pipefail
+        command -v powerprofilesctl >/dev/null || { echo no-daemon; exit 0; }
+        powerprofilesctl list 2>/dev/null | grep -qE '^\*? *{{ power_profile }}:' || { echo not-offered; exit 0; }
+        [[ "$(powerprofilesctl get)" == "{{ power_profile }}" ]] && { echo already; exit 0; }
+        powerprofilesctl set "{{ power_profile }}" && echo set
+      args:
+        executable: /bin/bash
+      register: power_result
+      changed_when: power_result.stdout == 'set'
+      failed_when: false
+      when: apply_prefs and (power_profile | default('') | length > 0)
+
+    - name: GNOME settings
+      community.general.dconf:
+        key: "{{ item.key }}"
+        value: "{{ item.value }}"
+        state: present
+      loop: "{{ dconf_settings | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+      become_user: "{{ golden_user }}"
+      when: apply_prefs
+
+    # ------------------------------------------------------ hardware quirks --
+    # Fixes tied to one model, keyed on the DMI vendor and product name.
+    - name: "Framework 13 (AMD Ryzen AI 300): use the Realtek internal mic, not the broken ACP one"
+      when:
+        - ansible_facts['system_vendor'] == 'Framework'
+        - ansible_facts['product_name'] == 'Laptop 13 (AMD Ryzen AI 300 Series)'
+      block:
+        - name: WirePlumber drop-in directory (stock Ubuntu has no /etc/wireplumber)
+          ansible.builtin.file:
+            path: /etc/wireplumber/wireplumber.conf.d
+            state: directory
+            mode: "0755"
+
+        - name: Disable UCM so the ALC285 mic is the default source
+          ansible.builtin.copy:
+            src: quirks/framework13-amd-ai300-mic.conf
+            dest: /etc/wireplumber/wireplumber.conf.d/50-disable-ucm.conf
+            mode: "0644"
+          notify: Restart audio for the primary user
+
+    - name: Automatic updates
+      when: auto_updates
+      block:
+        - name: Unattended upgrades cover the updates pocket and the third-party repos
+          ansible.builtin.copy:
+            dest: /etc/apt/apt.conf.d/52golden-unattended
+            mode: "0644"
+            content: |
+              // Managed by golden/ubuntu/playbook.yml (auto_update_origins in vars/apps.yml)
+              Unattended-Upgrade::Origins-Pattern {
+              {% for o in auto_update_origins %}
+                  "{{ o }}";
+              {% endfor %}
+              };
+              Unattended-Upgrade::Remove-Unused-Dependencies "true";
+              Unattended-Upgrade::Automatic-Reboot "false";
+              APT::Periodic::Update-Package-Lists "1";
+              APT::Periodic::Unattended-Upgrade "1";
+
+        - name: Daily apt update timers
+          ansible.builtin.systemd_service:
+            name: "{{ item }}"
+            enabled: true
+            state: started
+          loop: [apt-daily.timer, apt-daily-upgrade.timer]
+
+        - name: Weekly Flatpak update units
+          ansible.builtin.copy:
+            dest: "/etc/systemd/system/{{ item.name }}"
+            mode: "0644"
+            content: "{{ item.content }}"
+          loop:
+            - name: golden-flatpak-update.service
+              content: |
+                [Unit]
+                Description=Golden weekly Flatpak update
+                ConditionACPower=true
+                Wants=network-online.target
+                After=network-online.target
+
+                [Service]
+                Type=oneshot
+                Nice=10
+                ExecStart=/usr/bin/flatpak update --system --noninteractive --assumeyes
+            - name: golden-flatpak-update.timer
+              content: |
+                [Unit]
+                Description=Golden weekly Flatpak update
+
+                [Timer]
+                OnCalendar=weekly
+                Persistent=true
+                RandomizedDelaySec=2h
+
+                [Install]
+                WantedBy=timers.target
+          loop_control:
+            label: "{{ item.name }}"
+          notify: Reload systemd
+
+    - name: No weekly converge timer (dropped; laptops change only via golden-update.sh)
+      ansible.builtin.systemd_service:
+        name: golden-converge.timer
+        enabled: false
+        state: stopped
+      failed_when: false
+
+    - name: Remove the converge units if a laptop still has them
+      ansible.builtin.file:
+        path: "/etc/systemd/system/{{ item }}"
+        state: absent
+      loop: [golden-converge.timer, golden-converge.service]
+      notify: Reload systemd
+
+    - name: Flush handlers so the timers are loaded
+      ansible.builtin.meta: flush_handlers
+
+    - name: Update timers on or off
+      ansible.builtin.systemd_service:
+        name: "{{ item.name }}"
+        enabled: "{{ item.wanted }}"
+        state: "{{ 'started' if item.wanted else 'stopped' }}"
+      loop:
+        - { name: golden-flatpak-update.timer, wanted: "{{ auto_updates }}" }
+      loop_control:
+        label: "{{ item.name }}"
+
+    # ---------------------------------------------------------- fingerprint --
+    - name: Fingerprint reader
+      when: fingerprint
+      block:
+        - name: Is there a supported reader, and is a finger enrolled
+          ansible.builtin.command: fprintd-list {{ golden_user }}
+          register: fprint
+          changed_when: false
+          failed_when: false
+
+        - name: Reader present
+          ansible.builtin.set_fact:
+            fprint_reader: "{{ fprint.rc == 0 and ('found 0 devices' not in fprint.stdout) and ('No devices' not in fprint.stdout) }}"
+
+        - name: Is pam_fprintd already in common-auth
+          ansible.builtin.command: grep -c pam_fprintd /etc/pam.d/common-auth
+          register: pam_before
+          changed_when: false
+          failed_when: false
+
+        - name: Let PAM accept a fingerprint where there is a reader (password stays as fallback)
+          ansible.builtin.command: pam-auth-update --enable fprintd
+          changed_when: pam_before.stdout | default('0') | trim == '0'
+          when: fprint_reader
+
+        - name: Note that a finger still has to be enrolled
+          ansible.builtin.set_fact:
+            golden_todo: "{{ golden_todo + [item] }}"
+          loop:
+            - |-
+              Fingerprint reader found, no finger enrolled yet:
+                Settings > System > Users > Fingerprint Login   (or: fprintd-enroll)
+              If golden-status lists a fingerprint sensor firmware update, apply that first.
+          loop_control:
+            label: fingerprint
+          when: fprint_reader and ('no fingers enrolled' in fprint.stdout)
+
+    # ---------------------------------------------------------- secure boot --
+    # VirtualBox builds and signs its modules with the machine's MOK, but enrolling that
+    # key needs a one-time password and a confirmation at the next boot: nothing unattended
+    # can do it. Leave a note that golden-status shows when the install has finished.
+    - name: Secure Boot state and VirtualBox module signing key
+      ansible.builtin.shell: |
+        set -o pipefail
+        grep -q '^vboxdrv ' /proc/modules && exit 0                       # loaded: nothing to do
+        mokutil --sb-state 2>/dev/null | grep -q 'SecureBoot enabled' || exit 0
+        [[ -f /var/lib/shim-signed/mok/MOK.der ]] || exit 0
+        # mokutil says "is already enrolled" or "is not enrolled"
+        mokutil --test-key /var/lib/shim-signed/mok/MOK.der 2>/dev/null | grep -q 'already enrolled' && exit 0
+        echo needs-enrolment
+      args:
+        executable: /bin/bash
+      register: mok_state
+      changed_when: false
+      when: "'virtualbox-7.2' in golden_packages"
+
+    - name: Note the one-time key enrolment VirtualBox still needs
+      ansible.builtin.set_fact:
+        golden_todo: "{{ golden_todo + [item] }}"
+      loop:
+        - |-
+          VirtualBox cannot start VMs until its signing key is trusted (Secure Boot is on).
+          Once, at this laptop:  sudo mokutil --import /var/lib/shim-signed/mok/MOK.der
+          then reboot, choose "Enroll MOK" on the blue screen and enter the password you set.
+      loop_control:
+        label: VirtualBox signing key
+      when: mok_state.stdout | default('') == 'needs-enrolment'
+
+    # ----------------------------------------------------------------- deck --
+    - name: Disposable browser VM (deck)
+      when: deck_vm
+      block:
+        - name: Deck sizes
+          ansible.builtin.copy:
+            dest: /etc/golden/deck.conf
+            mode: "0644"
+            content: |
+              # Managed by golden/ubuntu/playbook.yml (deck_* in vars/apps.yml). Read by deck-create.
+              CPUS={{ deck_cpus }}
+              MEMORY_MB={{ deck_memory_mb }}
+              MIN_CPUS={{ deck_min_cpus }}
+              MAX_CPUS={{ deck_max_cpus }}
+              MIN_MEMORY_MB={{ deck_min_memory_mb }}
+              MAX_MEMORY_MB={{ deck_max_memory_mb }}
+              DISK_MB={{ deck_disk_mb }}
+              ISO=/opt/golden/ubuntu.iso
+              ISO_URL={{ deck_iso_url }}
+
+        - name: Kept ISO readable by deck-create (runs as the user)
+          ansible.builtin.file:
+            path: /opt/golden/ubuntu.iso
+            mode: "0644"
+          when: "'/opt/golden/ubuntu.iso' is file"
+
+        - name: Deck tools
+          ansible.builtin.copy:
+            src: "deck/{{ item }}"
+            dest: "/usr/local/bin/{{ item }}"
+            mode: "0755"
+          loop: [deck-create, deck-reset]
+
+        - name: Does deck exist already, and can VirtualBox run
+          ansible.builtin.shell: |
+            grep -q '^vboxdrv ' /proc/modules || { echo no-module; exit 0; }
+            sudo -u "{{ golden_user }}" VBoxManage showvminfo deck >/dev/null 2>&1 && echo exists || echo missing
+          args:
+            executable: /bin/bash
+          register: deck_state
+          changed_when: false
+
+        - name: Create deck now (unattended guest install, about 15 minutes)
+          ansible.builtin.command: /usr/local/bin/deck-create
+          become_user: "{{ golden_user }}"
+          when: deck_state.stdout == 'missing'
+          register: deck_create
+          changed_when: true
+          failed_when: false
+
+        - name: Why deck is not there yet
+          ansible.builtin.set_fact:
+            deck_why: "{{ ': VirtualBox cannot run until its signing key is enrolled (see above)' if deck_state.stdout == 'no-module' else '' }}"
+
+        - name: Note when deck could not be made yet
+          ansible.builtin.set_fact:
+            golden_todo: "{{ golden_todo + [item] }}"
+          loop:
+            - |-
+              deck (the disposable browser VM) is not made yet{{ deck_why }}.
+              When VirtualBox works:  deck-create   (about 15 minutes, unattended)   then:  deck-reset
+          loop_control:
+            label: deck
+          when: deck_state.stdout == 'no-module' or (deck_create is defined and deck_create.rc | default(0) != 0)
+
+    # ------------------------------------------------------------- firmware --
+    - name: Firmware updates
+      when: firmware_check
+      block:
+        - name: LVFS metadata refresh timer
+          ansible.builtin.systemd_service:
+            name: fwupd-refresh.timer
+            enabled: true
+            state: started
+
+        - name: Available firmware updates (refresh, then list; never applied here)
+          ansible.builtin.script: files/fw-updates.py
+          register: fw_updates
+          changed_when: false
+          failed_when: false
+
+        - name: Note firmware updates that are waiting
+          ansible.builtin.set_fact:
+            golden_todo: "{{ golden_todo + [item] }}"
+          loop:
+            - |-
+              Firmware/BIOS updates are available:
+              {% for line in fw_updates.stdout_lines | select('search', '->') %}
+                {{ line }}
+              {% endfor %}
+              Plug in mains power, then:  sudo fwupdmgr update   (it reboots to apply BIOS updates)
+          loop_control:
+            label: firmware updates
+          when: fw_updates.stdout_lines | select('search', '->') | list | length > 0
+
+    - name: Remember that the preferences were applied
+      ansible.builtin.copy:
+        dest: /var/lib/golden/preferences-applied
+        mode: "0644"
+        content: "{{ ansible_date_time.iso8601 }}\n"
+      when: apply_prefs
+
+    - name: Write the list of steps left to do by hand
+      ansible.builtin.copy:
+        dest: /var/lib/golden/todo
+        mode: "0644"
+        content: "{{ golden_todo | join('\n\n') }}\n"
+      when: golden_todo | length > 0
+
+    - name: Clear that list when nothing is left
+      ansible.builtin.file:
+        path: /var/lib/golden/todo
+        state: absent
+      when: golden_todo | length == 0
+
+    # ------------------------------------------------------- store downloads --
+    # Last on purpose: these are the largest downloads and depend on outside services. If one
+    # fails, everything above is already applied and the first-boot unit retries until it works.
+    - name: Snaps
+      community.general.snap:
+        name: "{{ snaps }}"
+        state: present
+      register: snaps_result
+      until: snaps_result is succeeded
+      retries: 3
+      delay: 20
+
+    - name: Flathub remote
+      community.general.flatpak_remote:
+        name: flathub
+        flatpakrepo_url: https://dl.flathub.org/repo/flathub.flatpakrepo
+        state: present
+
+    # Checked with `flatpak info` rather than the flatpak module: after an interrupted
+    # download the module sees the app's language pack and reports the app as installed.
+    - name: Flatpaks already installed
+      ansible.builtin.command: flatpak info --system {{ item }}
+      loop: "{{ flatpaks }}"
+      register: flatpak_info
+      changed_when: false
+      failed_when: false
+
+    - name: Flatpaks
+      ansible.builtin.command: flatpak install --system --noninteractive flathub {{ item.item }}
+      loop: "{{ flatpak_info.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: item.rc != 0
+      register: flatpaks_result
+      changed_when: true
+      until: flatpaks_result is succeeded   # large downloads; a dropped connection is common
+      retries: 3
+      delay: 20
+
+  handlers:
+    - name: Reload NetworkManager connections
+      ansible.builtin.command: nmcli connection reload
+      changed_when: true
+
+    - name: Restart audio for the primary user
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        scope: user
+        state: restarted
+      loop: [wireplumber, pipewire, pipewire-pulse]
+      become_user: "{{ golden_user }}"
+      environment:
+        XDG_RUNTIME_DIR: "/run/user/{{ golden_uid }}"
+        DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ golden_uid }}/bus"
+      failed_when: false   # no session running (first boot before login): the next login starts it fresh
+
+    - name: Restart libvirt
+      ansible.builtin.systemd_service:
+        name: libvirtd.service
+        state: restarted
+      when: "'libvirt-daemon-system' in golden_packages"
+
+    - name: Reload systemd
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
+    - name: Restart freshclam
+      ansible.builtin.systemd_service:
+        name: clamav-freshclam.service
+        state: restarted
+
+    - name: Stop clamd
+      ansible.builtin.systemd_service:
+        name: clamav-daemon.service
+        state: stopped
+        daemon_reload: true
+
+    - name: Apt update
+      ansible.builtin.apt:
+        update_cache: true

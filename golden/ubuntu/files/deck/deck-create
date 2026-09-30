@@ -1,0 +1,60 @@
+#!/bin/bash
+# deck-create — make "deck", the disposable browser VM, in VirtualBox (once per machine).
+#
+#   deck-create              create the VM, install a minimal Ubuntu + Firefox unattended
+#                            from the golden ISO, then snapshot it as "Ready" (about 15 minutes)
+#   deck-reset               throw away everything since the last snapshot and start it
+#
+# Run as your own user (the VM lives in ~/VirtualBox VMs). Sizes come from
+# /etc/golden/deck.conf, written by the golden playbook from vars/apps.yml.
+set -euo pipefail
+NAME=deck
+CPUS=auto; MEMORY_MB=auto; DISK_MB=25600; ISO=/opt/golden/ubuntu.iso; ISO_URL=""
+MIN_CPUS=2; MAX_CPUS=10; MIN_MEMORY_MB=4096; MAX_MEMORY_MB=11010
+# shellcheck disable=SC1091
+[[ -f /etc/golden/deck.conf ]] && . /etc/golden/deck.conf
+clamp() { local v=$1 lo=$2 hi=$3; (( v < lo )) && v=$lo; (( v > hi )) && v=$hi; echo "$v"; }
+[[ "$CPUS" == auto ]] && CPUS=$(clamp $(( $(nproc) / 2 )) "$MIN_CPUS" "$MAX_CPUS")                       # half the host's threads
+[[ "$MEMORY_MB" == auto ]] && MEMORY_MB=$(clamp $(( $(awk '/MemTotal/{print $2}' /proc/meminfo) / 4096 )) "$MIN_MEMORY_MB" "$MAX_MEMORY_MB")   # a quarter of its RAM
+die() { echo "deck-create: $*" >&2; exit 1; }
+
+[[ $EUID -ne 0 ]] || die "run as your own user, not root"
+command -v VBoxManage >/dev/null || die "VirtualBox is not installed"
+grep -q '^vboxdrv ' /proc/modules || die "the VirtualBox kernel module is not loaded (Secure Boot: enrol the key first, see golden-status)"
+id -nG | grep -qw vboxusers || die "you are not in the vboxusers group yet: log out and back in"
+if VBoxManage showvminfo "$NAME" >/dev/null 2>&1; then echo "$NAME already exists; use deck-reset to start it fresh"; exit 0; fi
+if [[ ! -f "$ISO" ]]; then
+    [[ -n "$ISO_URL" ]] || die "no Ubuntu ISO at $ISO (the install copies it there; or set ISO= in /etc/golden/deck.conf)"
+    ISO="$HOME/Downloads/$(basename "$ISO_URL")"
+    [[ -f "$ISO" ]] || { echo "Fetching $ISO_URL (about 6 GB)"; curl -fL --progress-bar -o "$ISO" "$ISO_URL"; }
+fi
+
+echo "Creating $NAME: $CPUS CPUs, $MEMORY_MB MB, $DISK_MB MB disk, from $(basename "$ISO")"
+VBoxManage createvm --name "$NAME" --ostype Ubuntu_64 --register >/dev/null
+VBoxManage modifyvm "$NAME" --cpus "$CPUS" --memory "$MEMORY_MB" --vram 128 --graphicscontroller vmsvga \
+    --nic1 nat --boot1 disk --boot2 dvd --boot3 none --boot4 none --audio-driver none --clipboard-mode disabled
+vmdir=$(VBoxManage showvminfo "$NAME" --machinereadable | sed -n 's/^CfgFile="\(.*\)\/[^/]*"$/\1/p')
+VBoxManage createmedium disk --filename "$vmdir/$NAME.vdi" --size "$DISK_MB" --format VDI >/dev/null
+VBoxManage storagectl "$NAME" --name SATA --add sata --controller IntelAhci --portcount 1 --bootable on
+VBoxManage storageattach "$NAME" --storagectl SATA --port 0 --device 0 --type hdd --medium "$vmdir/$NAME.vdi"
+VBoxManage storagectl "$NAME" --name IDE --add ide --controller PIIX4
+
+# Unattended install: VirtualBox boots the ISO with our own autoinstall (files/deck/user-data:
+# throwaway account deck/deck, minimal desktop which includes Firefox, power off when done).
+# Its own generated recipe does not work with Ubuntu 26.04, and guest additions are not needed.
+template=${TEMPLATE:-/opt/golden/ubuntu/files/deck/user-data}
+[[ -f "$template" ]] || die "missing $template"
+VBoxManage unattended install "$NAME" --iso "$ISO" --user deck --password deck \
+    --script-template="$template" --no-install-additions --start-vm=headless >/dev/null
+echo "Installing the guest (headless). This takes about 15 minutes; waiting..."
+for (( i = 0; i < 240; i++ )); do
+    sleep 15
+    state=$(VBoxManage showvminfo "$NAME" --machinereadable | sed -n 's/^VMState="\(.*\)"$/\1/p')
+    [[ "$state" == poweroff ]] && break
+done
+[[ "${state:-}" == poweroff ]] || die "the guest install did not finish within an hour; look at it with: VBoxManage startvm $NAME"
+VBoxManage storageattach "$NAME" --storagectl IDE --port 0 --device 0 --medium none 2>/dev/null || true   # drop the ISO
+VBoxManage storageattach "$NAME" --storagectl IDE --port 1 --device 0 --medium none 2>/dev/null || true
+VBoxManage snapshot "$NAME" take Ready --description "Fresh minimal Ubuntu with Firefox, made by deck-create" >/dev/null
+echo "$NAME is ready. Start it with deck-reset (always from the Ready snapshot; user deck, password deck)."
+echo "To update it: start it, update, then: VBoxManage snapshot $NAME take \"updated $(date +%b%y)\""
