@@ -161,6 +161,7 @@ clamav_exclude_paths:               # regexes; big, churny or machine-generated 
   - ^/home/[^/]+/VirtualBox.VMs/
   - ^/home/[^/]+/\.local/share/containers/
   - ^/home/[^/]+/\.var/app/[^/]+/cache/
+  - ^/home/[^/]+/Documents/my_notes/      # personal notes; sensitive text, false alarms not wanted
 
 # Extra groups for the primary user.
 user_groups:

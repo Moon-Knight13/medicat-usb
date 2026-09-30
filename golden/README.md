@@ -184,6 +184,8 @@ Set up to cost nothing while idle. Settings live under `clamav_*` in `vars/apps.
   demand when something scans, for example `clamdscan --fdpass ~/Downloads`.
 - `golden-clamscan.timer` scans `/home` weekly at the lowest CPU and disk priority, on
   mains power only, then stops the scanner. Caches, Steam libraries and VM disks are skipped.
+- `clamav_exclude_paths` applies to the scanner daemon, so to the weekly scan and to
+  `clamdscan`. A plain `clamscan` ignores it; pass `--exclude-dir` yourself.
 - Findings: `/var/log/clamav/golden-scan.log`. A scan that finds something leaves
   `golden-clamscan.service` in the failed state (`systemctl --failed`). Nothing is deleted
   or quarantined automatically.
