@@ -15,6 +15,7 @@
     golden_todo: []            # steps nothing unattended can do; shown by golden-status when finished
     golden_user: "{{ lookup('pipe', 'getent passwd 1000 | cut -d: -f1') }}"
     golden_home: "/home/{{ golden_user }}"
+    golden_uid: "{{ lookup('pipe', 'getent passwd 1000 | cut -d: -f3') }}"
 
   pre_tasks:
     - name: Sanity checks
@@ -404,9 +405,19 @@
       loop_control:
         label: "{{ item.key }}"
       become_user: "{{ golden_user }}"
-
-    # ---------------------------------------------------------- sustainment --
       when: apply_prefs
+
+    # ------------------------------------------------------ hardware quirks --
+    # Fixes tied to one model, keyed on the DMI vendor and product name.
+    - name: "Framework 13 (AMD Ryzen AI 300): use the Realtek internal mic, not the broken ACP one"
+      ansible.builtin.copy:
+        src: quirks/framework13-amd-ai300-mic.conf
+        dest: /etc/wireplumber/wireplumber.conf.d/50-disable-ucm.conf
+        mode: "0644"
+      when:
+        - ansible_facts['system_vendor'] == 'Framework'
+        - ansible_facts['product_name'] == 'Laptop 13 (AMD Ryzen AI 300 Series)'
+      notify: Restart audio for the primary user
 
     - name: Automatic updates
       when: auto_updates
@@ -679,6 +690,18 @@
       delay: 20
 
   handlers:
+    - name: Restart audio for the primary user
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        scope: user
+        state: restarted
+      loop: [wireplumber, pipewire, pipewire-pulse]
+      become_user: "{{ golden_user }}"
+      environment:
+        XDG_RUNTIME_DIR: "/run/user/{{ golden_uid }}"
+        DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ golden_uid }}/bus"
+      failed_when: false   # no session running (first boot before login): the next login starts it fresh
+
     - name: Restart libvirt
       ansible.builtin.systemd_service:
         name: libvirtd.service

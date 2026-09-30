@@ -128,6 +128,15 @@ anything, and it leaves your personal preferences alone: desktop settings, VS Co
 and ssh config and dotfiles are applied once at first boot, and changes you make afterwards
 stay. To re-apply them: `sudo golden-update.sh --preferences`.
 
+### Hardware quirks
+
+Fixes tied to one model, applied only when the DMI vendor and product match:
+
+- **Framework Laptop 13 (AMD Ryzen AI 300 Series)**: the internal microphone. The ALSA UCM
+  profiles expose an ACP digital mic that records garbage on this model and hide the working
+  Realtek one; a WirePlumber drop-in turns UCM off. If the mic sounds harsh, lower
+  "Internal Mic Boost" in `alsamixer`. Headset-jack mic under this setup is untested.
+
 ### Power profile
 
 `power_profile: performance` in `vars/apps.yml` sets the laptop to performance mode once, at
