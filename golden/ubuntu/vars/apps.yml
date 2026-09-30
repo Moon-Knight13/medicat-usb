@@ -51,6 +51,7 @@ apt_packages:
     - wbritish
     - fwupd                      # firmware and BIOS updates from LVFS (Framework, Dell, Lenovo, ...)
     - jq
+    - wl-clipboard               # clipboard for terminal tools on Wayland (copying out of claude, etc.)
     - unattended-upgrades
   dev:
     - code
