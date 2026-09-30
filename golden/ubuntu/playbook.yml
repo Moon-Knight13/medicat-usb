@@ -536,6 +536,12 @@
               ISO=/opt/golden/ubuntu.iso
               ISO_URL={{ deck_iso_url }}
 
+        - name: Kept ISO readable by deck-create (runs as the user)
+          ansible.builtin.file:
+            path: /opt/golden/ubuntu.iso
+            mode: "0644"
+          when: "'/opt/golden/ubuntu.iso' is file"
+
         - name: Deck tools
           ansible.builtin.copy:
             src: "deck/{{ item }}"
