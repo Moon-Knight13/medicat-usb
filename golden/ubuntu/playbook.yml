@@ -492,9 +492,11 @@
     - name: Secure Boot state and VirtualBox module signing key
       ansible.builtin.shell: |
         set -o pipefail
+        grep -q '^vboxdrv ' /proc/modules && exit 0                       # loaded: nothing to do
         mokutil --sb-state 2>/dev/null | grep -q 'SecureBoot enabled' || exit 0
         [[ -f /var/lib/shim-signed/mok/MOK.der ]] || exit 0
-        mokutil --test-key /var/lib/shim-signed/mok/MOK.der 2>/dev/null | grep -q 'is enrolled' && exit 0
+        # mokutil says "is already enrolled" or "is not enrolled"
+        mokutil --test-key /var/lib/shim-signed/mok/MOK.der 2>/dev/null | grep -q 'already enrolled' && exit 0
         echo needs-enrolment
       args:
         executable: /bin/bash
