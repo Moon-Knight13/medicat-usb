@@ -301,6 +301,17 @@
       loop_control:
         label: ssh key
 
+    # VPNs from vars/local.yml: appear in the panel menu; you switch one on and authenticate.
+    - name: VPN connections (OpenConnect / AnyConnect)
+      ansible.builtin.template:
+        src: nm-openconnect.nmconnection.j2
+        dest: "/etc/NetworkManager/system-connections/{{ item.name }}.nmconnection"
+        mode: "0600"
+      loop: "{{ vpns | default([]) }}"
+      loop_control:
+        label: "{{ item.name }}"
+      notify: Reload NetworkManager connections
+
     - name: Projects (public repositories now; private and ssh ones after the key is authorised)
       ansible.builtin.command: /usr/local/bin/golden-projects
       become_user: "{{ golden_user }}"
@@ -410,14 +421,22 @@
     # ------------------------------------------------------ hardware quirks --
     # Fixes tied to one model, keyed on the DMI vendor and product name.
     - name: "Framework 13 (AMD Ryzen AI 300): use the Realtek internal mic, not the broken ACP one"
-      ansible.builtin.copy:
-        src: quirks/framework13-amd-ai300-mic.conf
-        dest: /etc/wireplumber/wireplumber.conf.d/50-disable-ucm.conf
-        mode: "0644"
       when:
         - ansible_facts['system_vendor'] == 'Framework'
         - ansible_facts['product_name'] == 'Laptop 13 (AMD Ryzen AI 300 Series)'
-      notify: Restart audio for the primary user
+      block:
+        - name: WirePlumber drop-in directory (stock Ubuntu has no /etc/wireplumber)
+          ansible.builtin.file:
+            path: /etc/wireplumber/wireplumber.conf.d
+            state: directory
+            mode: "0755"
+
+        - name: Disable UCM so the ALC285 mic is the default source
+          ansible.builtin.copy:
+            src: quirks/framework13-amd-ai300-mic.conf
+            dest: /etc/wireplumber/wireplumber.conf.d/50-disable-ucm.conf
+            mode: "0644"
+          notify: Restart audio for the primary user
 
     - name: Automatic updates
       when: auto_updates
@@ -624,7 +643,9 @@
           loop:
             - |-
               Firmware/BIOS updates are available:
-              {{ fw_updates.stdout_lines | select('search', '->') | join('\n') | indent(2, true) }}
+              {% for line in fw_updates.stdout_lines | select('search', '->') %}
+                {{ line }}
+              {% endfor %}
               Plug in mains power, then:  sudo fwupdmgr update   (it reboots to apply BIOS updates)
           loop_control:
             label: firmware updates
@@ -690,6 +711,10 @@
       delay: 20
 
   handlers:
+    - name: Reload NetworkManager connections
+      ansible.builtin.command: nmcli connection reload
+      changed_when: true
+
     - name: Restart audio for the primary user
       ansible.builtin.systemd_service:
         name: "{{ item }}"

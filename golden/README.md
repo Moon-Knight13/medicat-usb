@@ -83,6 +83,9 @@ next playbook run. Everything else (KVM, libvirt, Docker) works with Secure Boot
   anything else personal but not secret.
 - **Projects**: list repositories under `projects:` in `vars/local.yml`. Public ones clone
   into `~/Documents` at first boot; after signing in, `golden-projects` clones the rest.
+- **VPNs**: list them under `vpns:` in `vars/local.yml` (name, gateway, protocol, authgroup,
+  username). They appear in the panel menu; switch one on and enter your password. Nothing
+  secret is stored.
 - **Sign-ins stay manual** by design: GitHub CLI, Firefox, Discord, Spotify, Steam, Proton
   VPN, Obsidian Sync, Claude Code. Their tokens are the one thing a stick must not carry.
 - **Firefox**: signing in to the Firefox account restores bookmarks, add-ons (Bitwarden,

@@ -46,6 +46,7 @@ apt_packages:
     - f3
     - efibootmgr
     - openconnect
+    - network-manager-openconnect-gnome   # VPN entries in the panel menu (`vpns:` in vars/local.yml)
     - clamav
     - clamav-daemon
     - wbritish
