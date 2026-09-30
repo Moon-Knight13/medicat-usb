@@ -12,6 +12,7 @@
     - vars/apps.yml
     - "{{ lookup('first_found', ['vars/local.yml', 'vars/local.defaults.yml']) }}"
   vars:
+    golden_todo: []            # steps nothing unattended can do; shown by golden-status when finished
     golden_user: "{{ lookup('pipe', 'getent passwd 1000 | cut -d: -f1') }}"
     golden_home: "/home/{{ golden_user }}"
 
@@ -243,6 +244,39 @@
         - "files/dotfiles/.*"
       when: item | basename != '.keep'
 
+    - name: VS Code user settings directory
+      ansible.builtin.file:
+        path: "{{ golden_home }}/.config/Code/User"
+        state: directory
+        owner: "{{ golden_user }}"
+        group: "{{ golden_user }}"
+        mode: "0755"
+
+    - name: VS Code settings and keybindings
+      ansible.builtin.copy:
+        src: "vscode/{{ item }}"
+        dest: "{{ golden_home }}/.config/Code/User/{{ item }}"
+        owner: "{{ golden_user }}"
+        group: "{{ golden_user }}"
+        mode: "0644"
+      loop: [settings.json, keybindings.json]
+
+    - name: VS Code extensions already installed
+      ansible.builtin.command: code --list-extensions
+      become_user: "{{ golden_user }}"
+      register: code_extensions
+      changed_when: false
+      failed_when: false
+
+    - name: VS Code extensions
+      ansible.builtin.command: code --install-extension {{ item }}
+      become_user: "{{ golden_user }}"
+      loop: "{{ vscode_extensions }}"
+      when: item | lower not in (code_extensions.stdout | lower)
+      register: code_install
+      changed_when: "'successfully installed' in code_install.stdout | lower"
+      failed_when: false   # a marketplace hiccup should not fail the laptop; the next run retries
+
     - name: GNOME settings
       community.general.dconf:
         key: "{{ item.key }}"
@@ -277,20 +311,57 @@
         mode: "0755"
 
     - name: Note the one-time key enrolment VirtualBox still needs
-      ansible.builtin.copy:
-        dest: /var/lib/golden/todo
-        mode: "0644"
-        content: |
+      ansible.builtin.set_fact:
+        golden_todo: "{{ golden_todo + [item] }}"
+      loop:
+        - |-
           VirtualBox cannot start VMs until its signing key is trusted (Secure Boot is on).
           Once, at this laptop:  sudo mokutil --import /var/lib/shim-signed/mok/MOK.der
           then reboot, choose "Enroll MOK" on the blue screen and enter the password you set.
+      loop_control:
+        label: VirtualBox signing key
       when: mok_state.stdout | default('') == 'needs-enrolment'
 
-    - name: Clear that note once the key is enrolled
+    # ------------------------------------------------------------- firmware --
+    - name: Firmware updates
+      when: firmware_check
+      block:
+        - name: LVFS metadata refresh timer
+          ansible.builtin.systemd_service:
+            name: fwupd-refresh.timer
+            enabled: true
+            state: started
+
+        - name: Available firmware updates (refresh, then list; never applied here)
+          ansible.builtin.script: files/fw-updates.py
+          register: fw_updates
+          changed_when: false
+          failed_when: false
+
+        - name: Note firmware updates that are waiting
+          ansible.builtin.set_fact:
+            golden_todo: "{{ golden_todo + [item] }}"
+          loop:
+            - |-
+              Firmware/BIOS updates are available:
+              {{ fw_updates.stdout_lines | select('search', '->') | join('\n') | indent(2, true) }}
+              Plug in mains power, then:  sudo fwupdmgr update   (it reboots to apply BIOS updates)
+          loop_control:
+            label: firmware updates
+          when: fw_updates.stdout_lines | select('search', '->') | list | length > 0
+
+    - name: Write the list of steps left to do by hand
+      ansible.builtin.copy:
+        dest: /var/lib/golden/todo
+        mode: "0644"
+        content: "{{ golden_todo | join('\n\n') }}\n"
+      when: golden_todo | length > 0
+
+    - name: Clear that list when nothing is left
       ansible.builtin.file:
         path: /var/lib/golden/todo
         state: absent
-      when: mok_state.stdout | default('') != 'needs-enrolment'
+      when: golden_todo | length == 0
 
     # ------------------------------------------------------- store downloads --
     # Last on purpose: these are the largest downloads and depend on outside services. If one

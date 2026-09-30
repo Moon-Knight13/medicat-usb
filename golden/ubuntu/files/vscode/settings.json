@@ -1,0 +1,22 @@
+{
+  "git.autofetch": true,
+  "git.enableSmartCommit": true,
+  "files.autoSave": "afterDelay",
+  "github.copilot.nextEditSuggestions.enabled": true,
+  "chat.utilityModel": "customendpoint/Ollama2/qwen2.5-coder:7b",
+  "chat.utilitySmallModel": "customendpoint/Ollama2/qwen2.5-coder:7b",
+  "chat.tools.urls.autoApprove": {
+    "https://code.visualstudio.com": true,
+    "https://github.com/microsoft/vscode/wiki/*": true
+  },
+  "claudeCode.preferredLocation": "panel",
+  "terminal.integrated.mouseWheelScrollSensitivity": 3,
+  "terminal.integrated.gpuAcceleration": "off",
+  "remote.autoForwardPortsSource": "hybrid",
+  "remote.SSH.defaultForwardedPorts": [],
+  "yaml.schemas": {
+    "file:///home/USER/.vscode/extensions/continue.continue-2.0.0-linux-x64/config-yaml-schema.json": [
+      ".continue/**/*.yaml"
+    ]
+  }
+}
