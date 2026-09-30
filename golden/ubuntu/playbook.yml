@@ -381,6 +381,20 @@
       changed_when: "'successfully installed' in code_install.stdout | lower"
       failed_when: false   # a marketplace hiccup should not fail the laptop; the next run retries
 
+    - name: Power profile (once; power-profiles-daemon remembers it across reboots)
+      ansible.builtin.shell: |
+        set -o pipefail
+        command -v powerprofilesctl >/dev/null || { echo no-daemon; exit 0; }
+        powerprofilesctl list 2>/dev/null | grep -qE '^\*? *{{ power_profile }}:' || { echo not-offered; exit 0; }
+        [[ "$(powerprofilesctl get)" == "{{ power_profile }}" ]] && { echo already; exit 0; }
+        powerprofilesctl set "{{ power_profile }}" && echo set
+      args:
+        executable: /bin/bash
+      register: power_result
+      changed_when: power_result.stdout == 'set'
+      failed_when: false
+      when: apply_prefs and (power_profile | default('') | length > 0)
+
     - name: GNOME settings
       community.general.dconf:
         key: "{{ item.key }}"

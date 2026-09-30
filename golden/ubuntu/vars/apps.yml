@@ -172,6 +172,11 @@ user_groups:
 # NVIDIA: installed only when an NVIDIA GPU is detected.
 nvidia_container_toolkit: true
 
+# Power profile applied once (a preference): performance | balanced | power-saver | "" (leave).
+# Performance costs battery life on a laptop; chosen anyway. Skipped where the profile is
+# not offered or power-profiles-daemon is absent.
+power_profile: performance
+
 # GNOME settings (dconf), loaded as the primary user.
 dconf_settings:
   "/org/gnome/desktop/interface/color-scheme": "'prefer-dark'"

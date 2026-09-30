@@ -85,6 +85,10 @@ next playbook run. Everything else (KVM, libvirt, Docker) works with Secure Boot
   into `~/Documents` at first boot; after signing in, `golden-projects` clones the rest.
 - **Sign-ins stay manual** by design: GitHub CLI, Firefox, Discord, Spotify, Steam, Proton
   VPN, Obsidian Sync, Claude Code. Their tokens are the one thing a stick must not carry.
+- **Firefox**: signing in to the Firefox account restores bookmarks, add-ons (Bitwarden,
+  Proton Pass, FoxyProxy and the rest, including which are disabled) and settings through
+  Firefox Sync; history and passwords are not synced by choice. Then sign in to Bitwarden and
+  Proton Pass inside the browser. Nothing Firefox-related is carried on the stick.
 
 ### Claude Code
 
@@ -123,6 +127,12 @@ of the RAM, within `deck_*` in `vars/apps.yml`).
 anything, and it leaves your personal preferences alone: desktop settings, VS Code settings, git
 and ssh config and dotfiles are applied once at first boot, and changes you make afterwards
 stay. To re-apply them: `sudo golden-update.sh --preferences`.
+
+### Power profile
+
+`power_profile: performance` in `vars/apps.yml` sets the laptop to performance mode once, at
+first boot (a preference, so switching it later sticks). Performance costs battery life. Skipped
+on machines that do not offer that profile.
 
 ### Watching the first boot
 
