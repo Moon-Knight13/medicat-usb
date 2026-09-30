@@ -5,6 +5,8 @@
 # 2. Fall back to the copy carried over from the stick (/opt/golden).
 # On success, mark done and disable the unit. Log: /var/log/golden-firstboot.log
 set -uo pipefail
+# /etc/default/golden (written by golden-update.sh) can pin GOLDEN_REPO and GOLDEN_BRANCH.
+[[ -f /etc/default/golden ]] && . /etc/default/golden
 REPO="${GOLDEN_REPO:-https://github.com/Moon-Knight13/medicat-usb.git}"
 BRANCH="${GOLDEN_BRANCH:-main}"
 PLAYBOOK="golden/ubuntu/playbook.yml"
@@ -33,6 +35,7 @@ else
     exit 1
 fi
 mkdir -p /var/lib/golden && date -Is > /var/lib/golden/done
+[[ -f /var/lib/golden/todo ]] && { echo "=== still to do by hand:"; cat /var/lib/golden/todo; }
 systemctl disable golden-firstboot.service
 rm -f /etc/xdg/autostart/golden-status.desktop      # no progress window at later logins
 echo "=== done; re-run any time with: sudo ansible-pull -U $REPO $PLAYBOOK"

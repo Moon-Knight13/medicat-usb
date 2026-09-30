@@ -86,6 +86,7 @@
         state: present
         update_cache: true
         cache_valid_time: 3600
+      notify: Restart libvirt   # its first start during package install predates the libvirt-qemu user
 
     # Not /releases/latest: that can be a mobile-only release with no .deb attached.
     - name: Resolve Obsidian's newest .deb URL
@@ -252,6 +253,45 @@
         label: "{{ item.key }}"
       become_user: "{{ golden_user }}"
 
+    # ---------------------------------------------------------- secure boot --
+    # VirtualBox builds and signs its modules with the machine's MOK, but enrolling that
+    # key needs a one-time password and a confirmation at the next boot: nothing unattended
+    # can do it. Leave a note that golden-status shows when the install has finished.
+    - name: Secure Boot state and VirtualBox module signing key
+      ansible.builtin.shell: |
+        set -o pipefail
+        mokutil --sb-state 2>/dev/null | grep -q 'SecureBoot enabled' || exit 0
+        [[ -f /var/lib/shim-signed/mok/MOK.der ]] || exit 0
+        mokutil --test-key /var/lib/shim-signed/mok/MOK.der 2>/dev/null | grep -q 'is enrolled' && exit 0
+        echo needs-enrolment
+      args:
+        executable: /bin/bash
+      register: mok_state
+      changed_when: false
+      when: "'virtualbox-7.2' in golden_packages"
+
+    - name: State directory
+      ansible.builtin.file:
+        path: /var/lib/golden
+        state: directory
+        mode: "0755"
+
+    - name: Note the one-time key enrolment VirtualBox still needs
+      ansible.builtin.copy:
+        dest: /var/lib/golden/todo
+        mode: "0644"
+        content: |
+          VirtualBox cannot start VMs until its signing key is trusted (Secure Boot is on).
+          Once, at this laptop:  sudo mokutil --import /var/lib/shim-signed/mok/MOK.der
+          then reboot, choose "Enroll MOK" on the blue screen and enter the password you set.
+      when: mok_state.stdout | default('') == 'needs-enrolment'
+
+    - name: Clear that note once the key is enrolled
+      ansible.builtin.file:
+        path: /var/lib/golden/todo
+        state: absent
+      when: mok_state.stdout | default('') != 'needs-enrolment'
+
     # ------------------------------------------------------- store downloads --
     # Last on purpose: these are the largest downloads and depend on outside services. If one
     # fails, everything above is already applied and the first-boot unit retries until it works.
@@ -292,6 +332,12 @@
       delay: 20
 
   handlers:
+    - name: Restart libvirt
+      ansible.builtin.systemd_service:
+        name: libvirtd.service
+        state: restarted
+      when: "'libvirt-daemon-system' in golden_packages"
+
     - name: Reload systemd
       ansible.builtin.systemd_service:
         daemon_reload: true

@@ -9,6 +9,7 @@
 # Reads /var/log/golden-firstboot.log, which golden-firstboot.sh writes. Needs no root.
 LOG=/var/log/golden-firstboot.log
 DONE=/var/lib/golden/done
+TODO=/var/lib/golden/todo      # written by the playbook for steps nothing unattended can do
 PLAYBOOK=/opt/golden/ubuntu/playbook.yml
 
 # Steps the playbook prints: every named task up to the handlers, plus fact gathering,
@@ -18,6 +19,7 @@ total=$(awk '/^  handlers:/{exit} /^ *- name:/{n++} END{print n+0}' "$PLAYBOOK" 
 summary() {
     if [[ -f "$DONE" ]]; then
         echo "Finished $(date -d "$(cat "$DONE")" '+%a %H:%M' 2>/dev/null). Log out and back in to pick up the dock and group changes."
+        [[ -f "$TODO" ]] && { echo "Still to do by hand:"; sed 's/^/  /' "$TODO"; }
         return 0
     fi
     [[ -r "$LOG" ]] || { echo "Not started yet (it begins a few seconds after boot)."; return 1; }

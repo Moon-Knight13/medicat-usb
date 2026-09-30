@@ -8,6 +8,8 @@
 #                                        reboot, first-boot playbook. Disk is NOT encrypted in this mode.
 #       ... --unattended --encrypt=luks  same, on LVM inside LUKS (test passphrase "goldentest-luks";
 #                                        type it at boot with: vm-test.sh type goldentest-luks)
+#       SECUREBOOT=1 ... --unattended     same, with Secure Boot on (Microsoft-signed firmware): shows what
+#                                        unsigned kernel modules such as VirtualBox's do on a real laptop
 #       ... --unattended --encrypt=tpm   same, with TPM-backed encryption (emulated TPM + secure boot).
 #                                        Ubuntu 26.04.1 refuses this in any VM ("not available:
 #                                        running-in-vm"), so it only proves the refusal; test on hardware.
@@ -46,14 +48,16 @@ stop_tpm() { [[ -f "$VM/tpm/pid" ]] && kill "$(cat "$VM/tpm/pid")" 2>/dev/null; 
 
 common_args() {
     local machine=q35
-    if [[ "$MODE" == tpm ]]; then   # TPM-backed encryption needs secure boot and a TPM
+    if [[ "$MODE" == tpm || "$MODE" == *+sb ]]; then   # Microsoft-signed firmware with Secure Boot on
         OVMF_CODE=/usr/share/OVMF/OVMF_CODE_4M.ms.fd; OVMF_VARS_SRC=/usr/share/OVMF/OVMF_VARS_4M.ms.fd
         machine=q35,smm=on
+        echo -global driver=cfi.pflash01,property=secure,value=on
+    fi
+    if [[ "$MODE" == tpm ]]; then   # TPM-backed encryption also needs a TPM
         command -v swtpm >/dev/null || die "swtpm missing (sudo apt install swtpm)"
         mkdir -p "$VM/tpm"; stop_tpm
         swtpm socket --tpm2 --tpmstate dir="$VM/tpm" --ctrl type=unixio,path="$VM/tpm/sock" --pid file="$VM/tpm/pid" --daemon
-        echo -global driver=cfi.pflash01,property=secure,value=on \
-             -chardev socket,id=chrtpm,path="$VM/tpm/sock" -tpmdev emulator,id=tpm0,chardev=chrtpm \
+        echo -chardev socket,id=chrtpm,path="$VM/tpm/sock" -tpmdev emulator,id=tpm0,chardev=chrtpm \
              -device tpm-crb,tpmdev=tpm0
     fi
     [[ -f "$VM/OVMF_VARS.fd" ]] || cp "$OVMF_VARS_SRC" "$VM/OVMF_VARS.fd"
@@ -76,6 +80,7 @@ cmd_iso() {
         esac
     done
     [[ $encrypt == plain || $unattended -eq 1 ]] || die "--encrypt needs --unattended (otherwise you choose on the storage page)"
+    [[ "${SECUREBOOT:-0}" == "1" && $encrypt != tpm ]] && encrypt="$encrypt+sb"   # e.g. plain+sb, luks+sb
     [[ -n "$ISO" ]] || die "no Ubuntu ISO staged; run ./make-stick.sh update"
     command -v xorriso >/dev/null || die "xorriso missing (sudo apt install xorriso)"
     command -v socat >/dev/null || die "socat missing (sudo apt install socat)"
@@ -93,7 +98,7 @@ import sys, re
 p = sys.argv[1]; s = open(p).read(); pub = sys.argv[2]
 layout = {"plain": "name: lvm\n      sizing-policy: all",
           "luks":  "name: lvm\n      sizing-policy: all\n      password: goldentest-luks",
-          "tpm":   "name: hybrid\n      encrypted: true"}[sys.argv[3]]
+          "tpm":   "name: hybrid\n      encrypted: true"}[sys.argv[3].removesuffix("+sb")]
 s = re.sub(r"  interactive-sections:\n(    - .*\n)+", "", s)
 s = s.replace("  shutdown: reboot", "  ssh:\n    install-server: true\n    authorized-keys: ['%s']\n  shutdown: reboot" % pub)
 s = s.replace("  locale: en_GB.UTF-8", """  identity:
@@ -115,7 +120,7 @@ PY
     # Boot the ISO's own kernel so we can put "autoinstall" on the command line, as Ventoy does.
     # (Not under secure boot: the firmware only accepts the ISO's own signed boot chain.)
     local direct=(-kernel "$VM/vmlinuz" -initrd "$VM/initrd" -append "boot=casper autoinstall quiet splash ---")
-    [[ "$MODE" == tpm ]] && direct=(-boot d)
+    [[ "$MODE" == tpm || "$MODE" == *+sb ]] && direct=(-boot d)
     7z e -y -o"$VM" "$ISO" casper/vmlinuz casper/initrd >/dev/null
     echo "Booting $(basename "$ISO") ($( [[ $unattended -eq 1 ]] && echo unattended || echo 'identity + storage interactive' )) on VNC :9"
     # shellcheck disable=SC2046
@@ -189,5 +194,5 @@ case "${1:-}" in
     offline) cmd_link off ;;
     online)  cmd_link on ;;
     stop)  cmd_stop ;;
-    *) sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+    *) sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

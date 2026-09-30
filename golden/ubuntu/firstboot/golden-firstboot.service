@@ -5,6 +5,7 @@ Wants=network-online.target
 ConditionPathExists=!/var/lib/golden/done
 
 [Service]
+EnvironmentFile=-/etc/default/golden
 Type=oneshot
 ExecStart=/usr/local/sbin/golden-firstboot.sh
 Restart=on-failure

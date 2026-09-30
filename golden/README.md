@@ -43,6 +43,34 @@ yours but not for a public repo, such as your git name and email. `build` copies
 stick with the rest of this folder and the first boot applies it from there. Without it,
 git is left in "ask me for an email" mode rather than guessing.
 
+### Manual step on every machine with Secure Boot: trust the VirtualBox signing key
+
+VirtualBox builds its own kernel modules and signs them with a key made on the laptop
+(`/var/lib/shim-signed/mok/MOK.der`). With Secure Boot on, the firmware refuses those modules
+until that key is enrolled, which needs a one-time password and a confirmation at the next
+boot. Nothing unattended can do it, so the install finishes and `golden-status` says:
+
+```
+Still to do by hand:
+  VirtualBox cannot start VMs until its signing key is trusted (Secure Boot is on).
+  Once, at this laptop:  sudo mokutil --import /var/lib/shim-signed/mok/MOK.der
+  then reboot, choose "Enroll MOK" on the blue screen and enter the password you set.
+```
+
+Steps: run that `mokutil --import`, set a password, reboot. A blue "MOK management" screen
+appears (it times out in about 10 seconds): **Enroll MOK**, Continue, Yes, type the password,
+reboot. `VBoxManage --version` then prints only the version, and the note disappears at the
+next playbook run. Everything else (KVM, libvirt, Docker) works with Secure Boot on regardless.
+
+- **Fresh hardware**: always needed once per machine; the enrolment lives in that machine's
+  firmware.
+- **Reinstalling the same laptop**: the enrolment survives, but the reinstall makes a new key,
+  so enrol again. (The old key stays in the firmware unused; `mokutil --delete` removes it.)
+  Reusing one key across reinstalls would avoid this, at the cost of carrying the private key
+  on the stick; not done by default.
+- Choose "Enroll MOK", not "Enroll key from disk": the latter browses the EFI partition and
+  the key is not there.
+
 ### Watching the first boot
 
 A "Golden install" terminal window opens at login and lists each step until it finishes (it

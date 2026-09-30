@@ -1,13 +1,16 @@
 #!/bin/bash
 # golden-update.sh — bring an installed laptop up to date with the repo, without reinstalling.
 #
-#   curl -fsSL https://raw.githubusercontent.com/Moon-Knight13/medicat-usb/main/golden/ubuntu/firstboot/golden-update.sh | sudo bash
-#   sudo /opt/golden/ubuntu/firstboot/golden-update.sh [branch]        (default branch: main)
+#   sudo /opt/golden/ubuntu/firstboot/golden-update.sh [branch]   (default: the branch last used, else main)
+#   From a laptop that does not have it yet (replace <branch> with main once golden/ is merged):
+#   curl -fsSL https://raw.githubusercontent.com/Moon-Knight13/medicat-usb/<branch>/golden/ubuntu/firstboot/golden-update.sh | sudo bash -s <branch>
 #
 # Replaces /opt/golden with the repo's golden/ folder (keeping this laptop's vars/local.yml),
-# reinstalls the first-boot script, its unit and golden-status, then runs the playbook again
-# through the first-boot unit. Safe to repeat: the playbook only changes what differs.
+# reinstalls the first-boot script, its unit and golden-status, remembers the branch in
+# /etc/default/golden so first-boot's ansible-pull uses the same one, then runs the playbook
+# again through the first-boot unit. Safe to repeat: the playbook only changes what differs.
 set -euo pipefail
+[[ -f /etc/default/golden ]] && . /etc/default/golden
 REPO="${GOLDEN_REPO:-https://github.com/Moon-Knight13/medicat-usb.git}"
 BRANCH="${1:-${GOLDEN_BRANCH:-main}}"
 [[ $EUID -eq 0 ]] || { echo "ERROR: run with sudo" >&2; exit 1; }
@@ -34,6 +37,7 @@ install -m 0755 "$fb/golden-firstboot.sh" /usr/local/sbin/golden-firstboot.sh
 install -m 0644 "$fb/golden-firstboot.service" /etc/systemd/system/golden-firstboot.service
 install -m 0755 "$fb/golden-status" /usr/local/bin/golden-status
 install -D -m 0644 "$fb/golden-status.desktop" /etc/xdg/autostart/golden-status.desktop
+printf 'GOLDEN_REPO=%s\nGOLDEN_BRANCH=%s\n' "$REPO" "$BRANCH" > /etc/default/golden
 
 # Run it again through the unit, so retries and the log behave as on a first boot.
 rm -f /var/lib/golden/done
