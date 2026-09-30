@@ -177,6 +177,7 @@ dconf_settings:
   "/org/gnome/desktop/interface/color-scheme": "'prefer-dark'"
   "/org/gnome/desktop/input-sources/sources": "[('xkb', 'gb')]"
   "/org/gnome/desktop/peripherals/keyboard/numlock-state": "true"
+  "/org/gnome/desktop/peripherals/touchpad/click-method": "'areas'"   # bottom-right press = right-click (Framework)
   "/org/gnome/desktop/session/idle-delay": "uint32 0"
   "/org/gnome/nautilus/preferences/default-folder-viewer": "'list-view'"
   "/org/gnome/nautilus/preferences/search-filter-time-type": "'last_modified'"
