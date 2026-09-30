@@ -43,5 +43,6 @@ autoinstall:
     # Progress window at login until the first boot has finished; `golden-status` any time.
     - install -m 0755 /target/opt/golden/ubuntu/firstboot/golden-status /target/usr/local/bin/golden-status
     - install -D -m 0644 /target/opt/golden/ubuntu/firstboot/golden-status.desktop /target/etc/xdg/autostart/golden-status.desktop
+    - install -m 0755 /target/opt/golden/ubuntu/firstboot/golden-projects /target/usr/local/bin/golden-projects
 
   shutdown: reboot

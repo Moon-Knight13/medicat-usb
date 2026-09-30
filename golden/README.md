@@ -71,6 +71,21 @@ next playbook run. Everything else (KVM, libvirt, Docker) works with Secure Boot
 - Choose "Enroll MOK", not "Enroll key from disk": the latter browses the EFI partition and
   the key is not there.
 
+### Continuing work on the new machine: SSH, projects, sign-ins
+
+- **A new SSH key is made on every machine** (`~/.ssh/id_ed25519`); private keys are never
+  carried on the stick. The finish note shows the public key and the commands to add it to
+  GitHub (`gh auth login`, `gh ssh-key add`) and to servers (`ssh-copy-id`). A lost laptop
+  then means revoking one key, not all of them.
+- **Your `~/.ssh/config` can ride on the stick**: copy it to `golden/ubuntu/local/ssh_config`
+  (git-ignored), with `IdentityFile ~/.ssh/id_ed25519` for the hosts. It holds host names,
+  addresses and usernames, so it is on the stick, not in the public repo. Same folder for
+  anything else personal but not secret.
+- **Projects**: list repositories under `projects:` in `vars/local.yml`. Public ones clone
+  into `~/Documents` at first boot; after signing in, `golden-projects` clones the rest.
+- **Sign-ins stay manual** by design: GitHub CLI, Firefox, Discord, Spotify, Steam, Proton
+  VPN, Obsidian Sync, Claude Code. Their tokens are the one thing a stick must not carry.
+
 ### Watching the first boot
 
 A "Golden install" terminal window opens at login and lists each step until it finishes (it

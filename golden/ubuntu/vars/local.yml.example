@@ -5,3 +5,9 @@
 git_name: Your Name
 # GitHub's privacy address is <id>+<login> at users.noreply.github.com (see GitHub > Settings > Emails).
 git_email: your-email
+# Repositories to clone into ~/Documents. Plain URLs clone into a folder named after the
+# repo; "sub/dir: URL" clones into ~/Documents/sub/dir. Public https URLs clone at first
+# boot; ssh and private ones when you run `golden-projects` after setting up access.
+projects:
+  - https://github.com/you/public-repo.git
+  - work/tool: ssh://github.com/org/private-repo.git   # ssh form; git@host:path also works

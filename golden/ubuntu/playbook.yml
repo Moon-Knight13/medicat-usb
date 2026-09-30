@@ -90,12 +90,18 @@
       notify: Restart libvirt   # its first start during package install predates the libvirt-qemu user
 
     # Not /releases/latest: that can be a mobile-only release with no .deb attached.
+    # Discord and Obsidian update themselves once installed, so only the first install
+    # goes through here; that also keeps the run idempotent.
+    - name: Installed packages
+      ansible.builtin.package_facts:
+
     - name: Resolve Obsidian's newest .deb URL
       ansible.builtin.uri:
         url: https://api.github.com/repos/obsidianmd/obsidian-releases/releases?per_page=30
         return_content: true
       register: obsidian_releases
       changed_when: false
+      when: "'obsidian' not in ansible_facts.packages"
 
     - name: Pick the newest Obsidian release that ships an amd64 .deb
       ansible.builtin.set_fact:
@@ -103,6 +109,7 @@
           {{ obsidian_releases.json | map(attribute='assets') | flatten
              | selectattr('name', 'search', 'amd64[.]deb$')
              | map(attribute='browser_download_url') | first }}
+      when: "'obsidian' not in ansible_facts.packages"
 
     - name: Download .deb packages
       ansible.builtin.get_url:
@@ -111,14 +118,16 @@
         mode: "0644"
       loop:
         - { name: discord, url: "https://discord.com/api/download?platform=linux&format=deb" }
-        - { name: obsidian, url: "{{ obsidian_deb_url }}" }
+        - { name: obsidian, url: "{{ obsidian_deb_url | default('') }}" }
       loop_control:
         label: "{{ item.name }}"
+      when: item.name not in ansible_facts.packages
 
     - name: Install .deb packages
       ansible.builtin.apt:
         deb: "/tmp/{{ item }}.deb"
       loop: [discord, obsidian]
+      when: item not in ansible_facts.packages
 
     # --------------------------------------------------------------- clamav --
     - name: ClamAV signature update frequency
@@ -232,6 +241,64 @@
         owner: "{{ golden_user }}"
         group: "{{ golden_user }}"
         mode: "0644"
+
+    # SSH: one new key per machine (never carried between machines). The config in local/
+    # (ssh_config, on the stick only) can reference it as ~/.ssh/id_ed25519.
+    - name: SSH key for this machine
+      ansible.builtin.user:
+        name: "{{ golden_user }}"
+        generate_ssh_key: true
+        ssh_key_type: ed25519
+        ssh_key_file: .ssh/id_ed25519
+        ssh_key_comment: "{{ golden_user }}@{{ ansible_facts['hostname'] }}"
+
+    - name: Carried SSH config, if the stick has one
+      ansible.builtin.copy:
+        src: local/ssh_config
+        dest: "{{ golden_home }}/.ssh/config"
+        owner: "{{ golden_user }}"
+        group: "{{ golden_user }}"
+        mode: "0600"
+      when: lookup('ansible.builtin.fileglob', 'local/ssh_config') | length > 0
+
+    - name: This machine's public key
+      ansible.builtin.slurp:
+        src: "{{ golden_home }}/.ssh/id_ed25519.pub"
+      register: ssh_pub
+
+    - name: Note where the new key still has to be added
+      ansible.builtin.set_fact:
+        golden_todo: "{{ golden_todo + [item] }}"
+      loop:
+        - |-
+          Sign in and authorise this machine's new SSH key (nothing is carried between machines):
+            {{ ssh_pub.content | b64decode | trim }}
+            gh auth login                                  (GitHub, also used by git over https)
+            gh ssh-key add ~/.ssh/id_ed25519.pub -t "$(hostname)"
+            ssh-copy-id <host>                             (each server in ~/.ssh/config)
+      loop_control:
+        label: ssh key
+
+    - name: Projects (public repositories now; private and ssh ones after the key is authorised)
+      ansible.builtin.command: /usr/local/bin/golden-projects
+      become_user: "{{ golden_user }}"
+      register: projects_result
+      changed_when: "'cloned ' in projects_result.stdout"
+      failed_when: false
+      when: projects | default([]) | length > 0
+
+    - name: Note the projects still to clone
+      ansible.builtin.set_fact:
+        golden_todo: "{{ golden_todo + [item] }}"
+      loop:
+        - |-
+          Repositories that need access first (see above), then:  golden-projects
+          {% for line in projects_result.stdout_lines | select('search', '^not yet:') %}
+            {{ line | regex_replace('^not yet: (\S+).*', '\1') }}
+          {% endfor %}
+      loop_control:
+        label: projects
+      when: projects_result is defined and projects_result.rc | default(0) != 0
 
     - name: Dotfiles
       ansible.builtin.copy:

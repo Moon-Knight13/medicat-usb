@@ -69,3 +69,6 @@ logs/
 
 # personal values for the golden install (ride on the stick, never in git)
 golden/ubuntu/vars/local.yml
+
+# personal files carried on the stick, never in git (ssh config, ...)
+golden/ubuntu/local/
