@@ -45,10 +45,12 @@ vpn_off() {
 }
 trap vpn_off EXIT
 [[ "$(virsh -c $C domstate $NAME 2>/dev/null)" == running ]] || virsh -c $C start $NAME >/dev/null
-# GNOME would ask every time whether virt-viewer may capture keyboard shortcuts; answer "no"
-# once (the laptop's Super, Alt+Tab etc. keep working; Ctrl+Alt still releases the VM).
+# GNOME asks whether virt-viewer may capture keyboard shortcuts, and can only remember the
+# answer for an app with a desktop file (installed as org.virt-manager.virt-viewer.desktop).
+# Answer "no" once: the laptop's Super, Alt+Tab etc. keep working; Ctrl+Alt releases the VM.
 gdbus call --session --dest org.freedesktop.impl.portal.PermissionStore --object-path /org/freedesktop/impl/portal/PermissionStore \
-    --method org.freedesktop.impl.portal.PermissionStore.SetPermission gnome true shortcuts-inhibitor virt-viewer "['DENIED']" >/dev/null 2>&1 || true
+    --method org.freedesktop.impl.portal.PermissionStore.SetPermission gnome true shortcuts-inhibitor \
+    org.virt-manager.virt-viewer.desktop "['DENIED']" >/dev/null 2>&1 || true
 # While deck's window is open the laptop must not dim, lock or suspend: video in the VM
 # is invisible to GNOME's own "media is playing" check.
 gnome-session-inhibit --inhibit idle:suspend --reason "deck is open" \

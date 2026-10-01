@@ -667,6 +667,12 @@
             mode: "0755"
           loop: [deck, deck-create, deck-update, deck-firstrun]
 
+        - name: Desktop identity for virt-viewer (so GNOME remembers the shortcuts answer)
+          ansible.builtin.copy:
+            src: deck/org.virt-manager.virt-viewer.desktop
+            dest: /usr/share/applications/org.virt-manager.virt-viewer.desktop
+            mode: "0644"
+
         - name: Old VirtualBox deck command removed
           ansible.builtin.file:
             path: /usr/local/bin/deck-reset
