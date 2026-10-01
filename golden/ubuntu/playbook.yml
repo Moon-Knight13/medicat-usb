@@ -737,6 +737,20 @@
         dest: /usr/local/bin/vpn-chain
         mode: "0755"
 
+    # One short command per country too: vpn-chain-ee, vpn-chain-gb ... (a ">" cannot be part of
+    # a command name; the shell would read it as "write output to a file").
+    - name: VPN chain commands per country
+      ansible.builtin.copy:
+        dest: "/usr/local/bin/vpn-chain-{{ item.code | lower }}"
+        mode: "0755"
+        content: |
+          #!/bin/sh
+          # Proton VPN {{ item.name }} → {{ vpn_chain_inner_name }}. Off again: vpn-chain off
+          exec /usr/local/bin/vpn-chain {{ item.code }} "$@"
+      loop: "{{ vpn_chain_countries }}"
+      loop_control:
+        label: "{{ item.code }}"
+
     # One launcher per country in vpn_chain_countries, plus "off": Super, type "VPN", click.
     # (GNOME's own VPN menu only lists fixed NetworkManager profiles; Proton's are made fresh
     # on each connect, so a chained entry cannot live there without a Shell extension.)

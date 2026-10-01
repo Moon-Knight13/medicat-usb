@@ -30,6 +30,8 @@ Golden laptop commands
 
   VPN
     vpn-chain [COUNTRY]      Double VPN: Proton (default Estonia, kill switch on), then DCM through it
+    vpn-chain-ee             Same as vpn-chain EE: Proton Estonia → DCM
+    vpn-chain-gb             Same as vpn-chain GB: Proton UK → DCM
                              Also as launchers: Super, type "VPN": Proton Estonia → DCM, Proton UK → DCM, chain off
     vpn-chain off            DCM down, then Proton down; kill switch back as it was
     vpn-chain status         What is connected, and whether DCM really goes through Proton
