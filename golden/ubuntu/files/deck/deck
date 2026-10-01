@@ -10,6 +10,9 @@ LOCK="${XDG_RUNTIME_DIR:-/run/user/$UID}/deck-busy"
 [[ -e "$LOCK" ]] && { note "deck is busy" "$(cat "$LOCK" 2>/dev/null || echo "deck is being built or updated"). Try again when it finishes."; exit 1; }
 virsh -c $C dominfo $NAME >/dev/null 2>&1 || { note "No deck yet" "Build it with: deck-create (about 15 minutes)"; exit 1; }
 [[ "$(virsh -c $C domstate $NAME 2>/dev/null)" == running ]] || virsh -c $C start $NAME >/dev/null
-virt-viewer -c $C --attach --full-screen --wait $NAME || true
+# While deck's window is open the laptop must not dim, lock or suspend: video in the VM
+# is invisible to GNOME's own "media is playing" check.
+gnome-session-inhibit --inhibit idle:suspend --reason "deck is open" \
+    virt-viewer -c $C --attach --full-screen --wait $NAME || true
 virsh -c $C destroy $NAME >/dev/null 2>&1 || true
 echo "deck stopped; everything from that session is gone."
