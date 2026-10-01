@@ -26,6 +26,10 @@ Golden laptop commands
                              starts and ends, and if a restart is needed. Log: /var/log/golden-weekly-update.log
     Run it now               sudo systemctl start golden-weekly-update   (still waits for idle and mains)
 
+  Power
+    Lid closed on charger    Nothing happens (keeps running); on battery it suspends
+    deck window open         The laptop does not dim, lock or suspend
+
   Handy system commands
     fwupdmgr get-updates     Firmware/BIOS updates waiting (apply: sudo fwupdmgr update)
     powerprofilesctl         Power mode: performance / balanced / power-saver

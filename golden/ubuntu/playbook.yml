@@ -588,18 +588,50 @@
     # ----------------------------------------------------------- virtualbox --
     # VirtualBox is no longer part of the recipe: deck runs on KVM (part of the kernel, so no
     # out-of-tree modules and no Secure Boot key to enrol). Laptops installed earlier lose it here.
+    - name: Is VirtualBox installed
+      ansible.builtin.stat:
+        path: /usr/lib/virtualbox/VBoxSVC
+      register: vbox_installed
+
+    # Its removal script refuses while any VirtualBox process runs (a VM, VBoxSVC) and then
+    # leaves dpkg half-done, so stop them first.
+    - name: VirtualBox processes stopped before removal
+      ansible.builtin.shell: |
+        pkill -x VBoxHeadless; pkill -x VirtualBoxVM; pkill -x VBoxManage; pkill -x VirtualBox
+        sleep 3; pkill -x VBoxSVC; pkill -x VBoxXPCOMIPCD; sleep 5
+        pkill -9 -f '^/usr/lib/virtualbox/'; true
+      changed_when: true
+      when: vbox_installed.stat.exists
+
     - name: VirtualBox removed (deck is KVM now)
       ansible.builtin.apt:
         name: [virtualbox-7.2]
         state: absent
         purge: true
-        autoremove: true
+      when: vbox_installed.stat.exists
 
     - name: VirtualBox apt repository removed
       ansible.builtin.deb822_repository:
         name: virtualbox
         state: absent
       notify: Apt update
+
+    # ------------------------------------------------------------------ lid --
+    - name: Logind drop-in directory
+      ansible.builtin.file:
+        path: /etc/systemd/logind.conf.d
+        state: directory
+        mode: "0755"
+
+    - name: Closing the lid on mains power does nothing (on battery it still suspends)
+      ansible.builtin.copy:
+        dest: /etc/systemd/logind.conf.d/50-golden-lid.conf
+        mode: "0644"
+        content: |
+          # Managed by golden/ubuntu/playbook.yml (lid_close_on_power in vars/apps.yml).
+          [Login]
+          HandleLidSwitchExternalPower={{ 'ignore' if lid_close_on_power == 'nothing' else 'suspend' }}
+      notify: Reload logind
 
     # ----------------------------------------------------------------- deck --
     - name: Disposable media and browsing VM (deck)
@@ -815,6 +847,10 @@
     - name: Reload systemd
       ansible.builtin.systemd_service:
         daemon_reload: true
+
+    - name: Reload logind
+      ansible.builtin.command: systemctl kill -s HUP systemd-logind
+      changed_when: true
 
     - name: Restart freshclam
       ansible.builtin.systemd_service:

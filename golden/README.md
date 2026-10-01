@@ -99,6 +99,14 @@ stops, with no snapshot to restore.
 - It is built in the background at your first login (it needs your desktop session for sound),
   with a notification when ready. Until then the finish note mentions it.
 
+### Power and lid
+
+- Closing the lid on mains power does nothing, so a download or a film keeps going
+  (`lid_close_on_power` in `vars/apps.yml`); on battery it suspends. With an external screen
+  attached the lid is ignored either way.
+- On mains power the laptop never suspends by itself; on battery it suspends after 15 minutes
+  idle. While a `deck` window is open it does not dim, lock or suspend.
+
 ### Staying current after deployment
 
 | What | How | When |

@@ -179,6 +179,10 @@ nvidia_container_toolkit: true
 # accept a finger (password always stays as fallback). Enrolling a finger is done by hand.
 fingerprint: true
 
+# Lid closed while on mains power: nothing (keeps running, e.g. a download or a film to a TV)
+# or suspend. On battery the lid always suspends.
+lid_close_on_power: nothing
+
 # Power profile applied once (a preference): performance | balanced | power-saver | "" (leave).
 # Performance costs battery life on a laptop; chosen anyway. Skipped where the profile is
 # not offered or power-profiles-daemon is absent.
