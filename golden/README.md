@@ -65,6 +65,11 @@ Laptops installed earlier keep their enrolled VirtualBox key in the firmware unu
 - **VPNs**: list them under `vpns:` in `vars/local.yml` (name, gateway, protocol, authgroup,
   username). They appear in the panel menu; switch one on and enter your password. Nothing
   secret is stored.
+- **Double VPN** (`vpn-chain`): Proton VPN to `vpn_chain_country` (EE) with its kill switch on,
+  then the first `vpns:` entry (DCM) inside it, so the work VPN's server sees a Proton address.
+  It checks that traffic to the work gateway really goes through Proton before and after
+  connecting. `vpn-chain off` undoes it in reverse order. If large transfers stall over the
+  double tunnel, lower the work VPN's MTU (e.g. 1300).
 - **Sign-ins stay manual** by design: GitHub CLI, Firefox, Discord, Spotify, Steam, Proton
   VPN, Obsidian Sync, Claude Code. Their tokens are the one thing a stick must not carry.
 - **Firefox**: signing in to the Firefox account restores bookmarks, add-ons (Bitwarden,
@@ -112,6 +117,10 @@ stops, with no snapshot to restore.
   attached the lid is ignored either way.
 - On mains power the laptop never suspends by itself; on battery it suspends after 15 minutes
   idle. While a `deck` window is open it does not dim, lock or suspend.
+
+- The sound theme is `golden-quiet`: Yaru without the charger plug/unplug sounds, which GNOME
+  plays even with alert sounds off and which repeated every half minute when the charger
+  dropped out near full charge. Setting a BIOS charge limit (80%) avoids those dropouts.
 
 ### Staying current after deployment
 

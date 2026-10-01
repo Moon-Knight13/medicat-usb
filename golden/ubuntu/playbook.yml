@@ -719,6 +719,34 @@
             label: deck
           when: not deck_disk.stat.exists
 
+    # ------------------------------------------------------------- vpn chain --
+    # Double VPN on demand: Proton first, then a work VPN from `vpns:` inside it (vpn-chain).
+    - name: VPN chain settings
+      ansible.builtin.copy:
+        dest: /etc/golden/vpn-chain.conf
+        mode: "0644"
+        content: |
+          # Managed by golden/ubuntu/playbook.yml (vpn_chain_* in vars/apps.yml). Read by vpn-chain.
+          COUNTRY={{ vpn_chain_country }}
+          INNER={{ vpn_chain_inner | default((vpns | default([]) | first | default({})).name | default('DCM')) }}
+
+    - name: VPN chain command
+      ansible.builtin.copy:
+        src: vpn-chain
+        dest: /usr/local/bin/vpn-chain
+        mode: "0755"
+
+    # ---------------------------------------------------------------- sounds --
+    # gsd-power plays the charger plug/unplug sounds even with alert sounds off; a charger that
+    # drops out for a second near full charge made them repeat every half minute. This theme is
+    # Yaru without those two (libcanberra skips names with a .disabled file).
+    - name: Quiet sound theme (Yaru without charger plug/unplug)
+      ansible.builtin.copy:
+        src: sounds/golden-quiet
+        dest: /usr/local/share/sounds/
+        mode: preserve
+        directory_mode: "0755"
+
     # ------------------------------------------------------------------ help --
     - name: Golden-help command (lists the laptop's commands)
       ansible.builtin.copy:
