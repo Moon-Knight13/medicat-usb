@@ -137,13 +137,13 @@ stops, with no snapshot to restore.
 | Discord, Obsidian | update themselves | on launch |
 | ClamAV signatures | freshclam | 4 times a day |
 | Firmware and BIOS | fwupd metadata daily; updates listed by `golden-status`, applied by you | daily |
-| This recipe | `sudo golden-update.sh` when you choose to | never by itself |
+| This recipe | `golden-update` when you choose to | never by itself |
 
 `golden-status` says when a reboot is pending. Nothing re-applies the recipe by itself: run
-`sudo golden-update.sh` to bring a laptop up to date. An update never wipes, reboots or removes
+`golden-update` to bring a laptop up to date. An update never wipes, reboots or removes
 anything, and it leaves your personal preferences alone: desktop settings, VS Code settings, git
 and ssh config and dotfiles are applied once at first boot, and changes you make afterwards
-stay. To re-apply them: `sudo golden-update.sh --preferences`.
+stay. To re-apply them: `golden-update --preferences`. `golden-help` lists every command.
 
 ### Hardware quirks
 
@@ -180,9 +180,11 @@ golden-status --watch    # keep watching
 ### Repairing or updating a laptop without reinstalling
 
 ```bash
-sudo /opt/golden/ubuntu/firstboot/golden-update.sh          # from main
-sudo /opt/golden/ubuntu/firstboot/golden-update.sh <branch>  # from a branch
+golden-update              # from main (the branch last used); asks for your password
+golden-update <branch>     # from a branch, to try a change before merging it
 ```
+
+(`golden-update` runs `sudo /opt/golden/ubuntu/firstboot/golden-update.sh`.)
 
 It replaces `/opt/golden` with the repo's copy (keeping the laptop's `vars/local.yml`),
 reinstalls the first-boot pieces and runs the playbook again. A laptop installed before this

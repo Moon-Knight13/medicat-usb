@@ -666,7 +666,7 @@
             src: "deck/{{ item }}"
             dest: "/usr/local/bin/{{ item }}"
             mode: "0755"
-          loop: [deck, deck-create, deck-update, deck-firstrun]
+          loop: [deck, deck-create, deck-update]
 
         - name: Desktop identity for virt-viewer (so GNOME remembers the shortcuts answer)
           ansible.builtin.copy:
@@ -685,11 +685,17 @@
             state: directory
             mode: "0755"
 
-        - name: Deck guest-agent helper
+        - name: Deck internal helpers (guest agent, first-login build)
           ansible.builtin.copy:
-            src: deck/deck-agent
-            dest: /usr/local/lib/golden/deck-agent
+            src: "deck/{{ item }}"
+            dest: "/usr/local/lib/golden/{{ item }}"
             mode: "0755"
+          loop: [deck-agent, deck-firstrun]
+
+        - name: Old location of deck-firstrun removed (internal, not a command)
+          ansible.builtin.file:
+            path: /usr/local/bin/deck-firstrun
+            state: absent
 
         # deck is a per-user VM and needs the desktop session (PipeWire), so the first boot,
         # which runs before anyone logs in, leaves the build to deck-firstrun at the first login.
@@ -826,11 +832,12 @@
         directory_mode: "0755"
 
     # ------------------------------------------------------------------ help --
-    - name: Golden-help command (lists the laptop's commands)
+    - name: Golden commands (golden-help lists them; golden-update runs golden-update.sh)
       ansible.builtin.copy:
-        src: golden-help
-        dest: /usr/local/bin/golden-help
+        src: "{{ item }}"
+        dest: "/usr/local/bin/{{ item }}"
         mode: "0755"
+      loop: [golden-help, golden-update]
 
     # Obsidian (Electron) dies with SIGTRAP when the session ends; harmless, so no crash dialog.
     - name: Apport ignore-list directory

@@ -6,7 +6,7 @@ ConditionPathExists=!%h/.local/share/libvirt/images/deck.qcow2
 [Service]
 Type=oneshot
 ExecStartPre=/bin/sleep 60
-ExecStart=/usr/local/bin/deck-firstrun
+ExecStart=/usr/local/lib/golden/deck-firstrun
 
 [Install]
 WantedBy=graphical-session.target

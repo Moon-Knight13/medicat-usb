@@ -1,0 +1,9 @@
+#!/bin/bash
+# golden-update — update this laptop from the golden recipe on GitHub (asks for your password).
+#
+#   golden-update                  the branch last used (main)
+#   golden-update <branch>         try a branch first, e.g. before merging a pull request
+#   golden-update --preferences    also re-apply the desktop, VS Code, git/ssh and dotfile
+#                                  preferences (otherwise applied once, then left to you)
+# Follow it with: golden-status --watch
+exec sudo /opt/golden/ubuntu/firstboot/golden-update.sh "$@"
