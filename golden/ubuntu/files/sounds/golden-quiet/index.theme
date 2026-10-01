@@ -1,0 +1,8 @@
+[Sound Theme]
+Name=Golden quiet
+Comment=Yaru sounds without the charger plug/unplug sounds (a flaky charger made them repeat)
+Inherits=Yaru
+Directories=stereo
+
+[stereo]
+OutputProfile=stereo

@@ -1,0 +1,50 @@
+#!/bin/bash
+# golden-help — list the commands a golden laptop has and what they do.
+WORK=$(sed -n 's/^INNER=//p' /etc/golden/vpn-chain.conf 2>/dev/null); WORK=${WORK:-work VPN}
+sed "s/\$WORK/$WORK/g" <<'TXT'
+Golden laptop commands
+
+  Laptop and recipe
+    golden-status            What the golden install did, and what is left to do by hand
+    golden-status --watch    Follow an install or update while it runs
+    sudo golden-update.sh    Update this laptop from the recipe on GitHub (main)
+                             (full path: /opt/golden/ubuntu/firstboot/golden-update.sh)
+    golden-projects          Clone the repositories listed in the golden settings
+
+  deck: disposable media and browsing VM (KVM)
+    deck                     Start it full screen. Close the window (or Power Off inside) to stop;
+                             everything from the session is thrown away
+                             (Ubuntu, dark; Firefox with DuckDuckGo and uBlock Origin; user deck / password deck)
+                             Connects Proton VPN (Switzerland) with kill switch first, disconnects after; won't start
+                             without it. deck --no-vpn skips the VPN
+    deck-update              Install updates into its clean base (deck closed; about 2 minutes).
+                             Also done by the weekly update (below)
+    deck-create              Build it (the first login does this; about 15 minutes)
+    deck-create --rebuild    Delete it and build it again
+    In the VM window:        Ctrl+Alt releases mouse and keyboard; Shift+F11 leaves full screen
+
+  Updates
+    Automatic, weekly        Monday (or the first chance after) when on mains power and idle 10+ min:
+                             Ubuntu packages, snaps, Flatpaks and deck. A notification says when it
+                             starts and ends, and if a restart is needed. Log: /var/log/golden-weekly-update.log
+    Run it now               sudo systemctl start golden-weekly-update   (still waits for idle and mains)
+
+  VPN  (work VPN here: $WORK, from vpns: in the golden local.yml)
+    vpn-chain [COUNTRY]      Double VPN: Proton (default Estonia, kill switch on), then $WORK through it
+    vpn-chain-ee             Same as vpn-chain EE: Proton Estonia → $WORK
+    vpn-chain-gb             Same as vpn-chain GB: Proton UK → $WORK
+                             Also as launchers: Super, type "VPN"
+    vpn-chain off            $WORK down, then Proton down; kill switch back as it was
+    vpn-chain status         What is connected, and whether $WORK really goes through Proton
+    protonvpn connect --country CH / protonvpn disconnect / protonvpn status
+
+  Power
+    Lid closed on charger    Nothing happens (keeps running); on battery it suspends
+    deck window open         The laptop does not dim, lock or suspend
+
+  Handy system commands
+    fwupdmgr get-updates     Firmware/BIOS updates waiting (apply: sudo fwupdmgr update)
+    powerprofilesctl         Power mode: performance / balanced / power-saver
+    ssh-copy-id <host>       Put this laptop's SSH key on a server in ~/.ssh/config
+    virt-manager             Other virtual machines (KVM)
+TXT

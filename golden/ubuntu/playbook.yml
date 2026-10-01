@@ -15,6 +15,7 @@
     golden_todo: []            # steps nothing unattended can do; shown by golden-status when finished
     golden_user: "{{ lookup('pipe', 'getent passwd 1000 | cut -d: -f1') }}"
     golden_home: "/home/{{ golden_user }}"
+    vpn_chain_inner_name: "{{ vpn_chain_inner | default((vpns | default([]) | first | default({})).name | default('work')) }}"
     golden_uid: "{{ lookup('pipe', 'getent passwd 1000 | cut -d: -f3') }}"
 
   pre_tasks:
@@ -464,39 +465,62 @@
             state: started
           loop: [apt-daily.timer, apt-daily-upgrade.timer]
 
-        - name: Weekly Flatpak update units
+        # One weekly background update with notifications: Monday, or the first time after it
+        # that the laptop is on mains power and idle. apt (beyond the daily security run),
+        # snaps, Flatpaks and deck's clean base. Replaces the old weekly Flatpak-only timer.
+        - name: Weekly update program
+          ansible.builtin.copy:
+            src: golden-weekly-update
+            dest: /usr/local/sbin/golden-weekly-update
+            mode: "0755"
+
+        - name: Weekly update units
           ansible.builtin.copy:
             dest: "/etc/systemd/system/{{ item.name }}"
             mode: "0644"
             content: "{{ item.content }}"
           loop:
-            - name: golden-flatpak-update.service
+            - name: golden-weekly-update.service
               content: |
                 [Unit]
-                Description=Golden weekly Flatpak update
-                ConditionACPower=true
+                Description=Golden weekly update (runs only when due, on mains power and idle)
                 Wants=network-online.target
                 After=network-online.target
 
                 [Service]
                 Type=oneshot
                 Nice=10
-                ExecStart=/usr/bin/flatpak update --system --noninteractive --assumeyes
-            - name: golden-flatpak-update.timer
+                IOSchedulingClass=idle
+                ExecStart=/usr/local/sbin/golden-weekly-update
+            - name: golden-weekly-update.timer
               content: |
                 [Unit]
-                Description=Golden weekly Flatpak update
+                Description=Hourly check whether the weekly update is due
 
                 [Timer]
-                OnCalendar=weekly
+                OnCalendar=hourly
+                RandomizedDelaySec=10m
                 Persistent=true
-                RandomizedDelaySec=2h
 
                 [Install]
                 WantedBy=timers.target
           loop_control:
             label: "{{ item.name }}"
           notify: Reload systemd
+
+    - name: Old weekly Flatpak timer stopped (the weekly update covers Flatpaks)
+      ansible.builtin.systemd_service:
+        name: golden-flatpak-update.timer
+        enabled: false
+        state: stopped
+      failed_when: false
+
+    - name: Old weekly Flatpak units removed
+      ansible.builtin.file:
+        path: "/etc/systemd/system/{{ item }}"
+        state: absent
+      loop: [golden-flatpak-update.timer, golden-flatpak-update.service]
+      notify: Reload systemd
 
     - name: No weekly converge timer (dropped; laptops change only via golden-update.sh)
       ansible.builtin.systemd_service:
@@ -521,7 +545,7 @@
         enabled: "{{ item.wanted }}"
         state: "{{ 'started' if item.wanted else 'stopped' }}"
       loop:
-        - { name: golden-flatpak-update.timer, wanted: "{{ auto_updates }}" }
+        - { name: golden-weekly-update.timer, wanted: "{{ auto_updates }}" }
       loop_control:
         label: "{{ item.name }}"
 
@@ -562,39 +586,56 @@
             label: fingerprint
           when: fprint_reader and ('no fingers enrolled' in fprint.stdout)
 
-    # ---------------------------------------------------------- secure boot --
-    # VirtualBox builds and signs its modules with the machine's MOK, but enrolling that
-    # key needs a one-time password and a confirmation at the next boot: nothing unattended
-    # can do it. Leave a note that golden-status shows when the install has finished.
-    - name: Secure Boot state and VirtualBox module signing key
-      ansible.builtin.shell: |
-        set -o pipefail
-        grep -q '^vboxdrv ' /proc/modules && exit 0                       # loaded: nothing to do
-        mokutil --sb-state 2>/dev/null | grep -q 'SecureBoot enabled' || exit 0
-        [[ -f /var/lib/shim-signed/mok/MOK.der ]] || exit 0
-        # mokutil says "is already enrolled" or "is not enrolled"
-        mokutil --test-key /var/lib/shim-signed/mok/MOK.der 2>/dev/null | grep -q 'already enrolled' && exit 0
-        echo needs-enrolment
-      args:
-        executable: /bin/bash
-      register: mok_state
-      changed_when: false
-      when: "'virtualbox-7.2' in golden_packages"
+    # ----------------------------------------------------------- virtualbox --
+    # VirtualBox is no longer part of the recipe: deck runs on KVM (part of the kernel, so no
+    # out-of-tree modules and no Secure Boot key to enrol). Laptops installed earlier lose it here.
+    - name: Is VirtualBox installed
+      ansible.builtin.stat:
+        path: /usr/lib/virtualbox/VBoxSVC
+      register: vbox_installed
 
-    - name: Note the one-time key enrolment VirtualBox still needs
-      ansible.builtin.set_fact:
-        golden_todo: "{{ golden_todo + [item] }}"
-      loop:
-        - |-
-          VirtualBox cannot start VMs until its signing key is trusted (Secure Boot is on).
-          Once, at this laptop:  sudo mokutil --import /var/lib/shim-signed/mok/MOK.der
-          then reboot, choose "Enroll MOK" on the blue screen and enter the password you set.
-      loop_control:
-        label: VirtualBox signing key
-      when: mok_state.stdout | default('') == 'needs-enrolment'
+    # Its removal script refuses while any VirtualBox process runs (a VM, VBoxSVC) and then
+    # leaves dpkg half-done, so stop them first.
+    - name: VirtualBox processes stopped before removal
+      ansible.builtin.shell: |
+        pkill -x VBoxHeadless; pkill -x VirtualBoxVM; pkill -x VBoxManage; pkill -x VirtualBox
+        sleep 3; pkill -x VBoxSVC; pkill -x VBoxXPCOMIPCD; sleep 5
+        pkill -9 -f '^/usr/lib/virtualbox/'; true
+      changed_when: true
+      when: vbox_installed.stat.exists
+
+    - name: VirtualBox removed (deck is KVM now)
+      ansible.builtin.apt:
+        name: [virtualbox-7.2]
+        state: absent
+        purge: true
+      when: vbox_installed.stat.exists
+
+    - name: VirtualBox apt repository removed
+      ansible.builtin.deb822_repository:
+        name: virtualbox
+        state: absent
+      notify: Apt update
+
+    # ------------------------------------------------------------------ lid --
+    - name: Logind drop-in directory
+      ansible.builtin.file:
+        path: /etc/systemd/logind.conf.d
+        state: directory
+        mode: "0755"
+
+    - name: Closing the lid on mains power does nothing (on battery it still suspends)
+      ansible.builtin.copy:
+        dest: /etc/systemd/logind.conf.d/50-golden-lid.conf
+        mode: "0644"
+        content: |
+          # Managed by golden/ubuntu/playbook.yml (lid_close_on_power in vars/apps.yml).
+          [Login]
+          HandleLidSwitchExternalPower={{ 'ignore' if lid_close_on_power == 'nothing' else 'suspend' }}
+      notify: Reload logind
 
     # ----------------------------------------------------------------- deck --
-    - name: Disposable browser VM (deck)
+    - name: Disposable media and browsing VM (deck)
       when: deck_vm
       block:
         - name: Deck sizes
@@ -612,6 +653,7 @@
               DISK_MB={{ deck_disk_mb }}
               ISO=/opt/golden/ubuntu.iso
               ISO_URL={{ deck_iso_url }}
+              VPN_COUNTRY={{ deck_vpn_country | default('') }}
 
         - name: Kept ISO readable by deck-create (runs as the user)
           ansible.builtin.file:
@@ -624,39 +666,184 @@
             src: "deck/{{ item }}"
             dest: "/usr/local/bin/{{ item }}"
             mode: "0755"
-          loop: [deck-create, deck-reset]
+          loop: [deck, deck-create, deck-update, deck-firstrun]
 
-        - name: Does deck exist already, and can VirtualBox run
-          ansible.builtin.shell: |
-            grep -q '^vboxdrv ' /proc/modules || { echo no-module; exit 0; }
-            sudo -u "{{ golden_user }}" VBoxManage showvminfo deck >/dev/null 2>&1 && echo exists || echo missing
-          args:
-            executable: /bin/bash
-          register: deck_state
-          changed_when: false
+        - name: Desktop identity for virt-viewer (so GNOME remembers the shortcuts answer)
+          ansible.builtin.copy:
+            src: deck/org.virt-manager.virt-viewer.desktop
+            dest: /usr/share/applications/org.virt-manager.virt-viewer.desktop
+            mode: "0644"
 
-        - name: Create deck now (unattended guest install, about 15 minutes)
-          ansible.builtin.command: /usr/local/bin/deck-create
-          become_user: "{{ golden_user }}"
-          when: deck_state.stdout == 'missing'
-          register: deck_create
-          changed_when: true
-          failed_when: false
+        - name: Old VirtualBox deck command removed
+          ansible.builtin.file:
+            path: /usr/local/bin/deck-reset
+            state: absent
 
-        - name: Why deck is not there yet
-          ansible.builtin.set_fact:
-            deck_why: "{{ ': VirtualBox cannot run until its signing key is enrolled (see above)' if deck_state.stdout == 'no-module' else '' }}"
+        - name: Directory for golden helper programs
+          ansible.builtin.file:
+            path: /usr/local/lib/golden
+            state: directory
+            mode: "0755"
 
-        - name: Note when deck could not be made yet
+        - name: Deck guest-agent helper
+          ansible.builtin.copy:
+            src: deck/deck-agent
+            dest: /usr/local/lib/golden/deck-agent
+            mode: "0755"
+
+        # deck is a per-user VM and needs the desktop session (PipeWire), so the first boot,
+        # which runs before anyone logs in, leaves the build to deck-firstrun at the first login.
+        - name: Deck first-login build unit
+          ansible.builtin.copy:
+            src: systemd-user/deck-firstrun.service
+            dest: /etc/systemd/user/deck-firstrun.service
+            mode: "0644"
+
+        - name: Deck first-login build enabled for every user
+          ansible.builtin.command: systemctl --global enable deck-firstrun.service
+          register: deck_unit
+          changed_when: "'Created symlink' in deck_unit.stderr"
+
+        - name: Does this user have a deck yet
+          ansible.builtin.stat:
+            path: "{{ golden_home }}/.local/share/libvirt/images/deck.qcow2"
+          register: deck_disk
+
+        - name: Note that deck is built at the next login
           ansible.builtin.set_fact:
             golden_todo: "{{ golden_todo + [item] }}"
           loop:
             - |-
-              deck (the disposable browser VM) is not made yet{{ deck_why }}.
-              When VirtualBox works:  deck-create   (about 15 minutes, unattended)   then:  deck-reset
+              deck (the disposable media and browsing VM) is built in the background at your next
+              login (about 15 minutes, with a notification when it is ready). Or now:  deck-create
           loop_control:
             label: deck
-          when: deck_state.stdout == 'no-module' or (deck_create is defined and deck_create.rc | default(0) != 0)
+          when: not deck_disk.stat.exists
+
+    # ------------------------------------------------------------- vpn chain --
+    # Double VPN on demand: Proton first, then a work VPN from `vpns:` inside it (vpn-chain).
+    - name: VPN chain settings
+      ansible.builtin.copy:
+        dest: /etc/golden/vpn-chain.conf
+        mode: "0644"
+        content: |
+          # Managed by golden/ubuntu/playbook.yml (vpn_chain_* in vars/apps.yml). Read by vpn-chain.
+          COUNTRY={{ vpn_chain_countries[0].code }}
+          INNER={{ vpn_chain_inner_name }}
+
+    - name: VPN chain command
+      ansible.builtin.copy:
+        src: vpn-chain
+        dest: /usr/local/bin/vpn-chain
+        mode: "0755"
+
+    # One short command per country too: vpn-chain-ee, vpn-chain-gb ... (a ">" cannot be part of
+    # a command name; the shell would read it as "write output to a file").
+    - name: VPN chain commands per country
+      ansible.builtin.copy:
+        dest: "/usr/local/bin/vpn-chain-{{ item.code | lower }}"
+        mode: "0755"
+        content: |
+          #!/bin/sh
+          # Proton VPN {{ item.name }} → {{ vpn_chain_inner_name }}. Off again: vpn-chain off
+          exec /usr/local/bin/vpn-chain {{ item.code }} "$@"
+      loop: "{{ vpn_chain_countries }}"
+      loop_control:
+        label: "{{ item.code }}"
+
+    # One launcher per country in vpn_chain_countries, plus "off": Super, type "VPN", click.
+    # (GNOME's own VPN menu only lists fixed NetworkManager profiles; Proton's are made fresh
+    # on each connect, so a chained entry cannot live there without a Shell extension.)
+    - name: VPN chain launchers
+      ansible.builtin.copy:
+        dest: "/usr/share/applications/golden-vpn-chain-{{ item.code | lower }}.desktop"
+        mode: "0644"
+        content: |
+          [Desktop Entry]
+          Type=Application
+          Name=VPN: Proton {{ item.name }} → {{ vpn_chain_inner_name }}
+          Comment=Double VPN: Proton VPN to {{ item.name }} (kill switch on), then {{ vpn_chain_inner_name }} through it
+          Exec=/usr/local/bin/vpn-chain {{ item.code }}
+          Icon=network-vpn
+          Terminal=false
+          Categories=Network;
+          Keywords=vpn;proton;{{ vpn_chain_inner_name | lower }};chain;double;
+      loop: "{{ vpn_chain_countries }}"
+      loop_control:
+        label: "{{ item.code }}"
+
+    - name: VPN chain "off" launcher
+      ansible.builtin.copy:
+        dest: /usr/share/applications/golden-vpn-chain-off.desktop
+        mode: "0644"
+        content: |
+          [Desktop Entry]
+          Type=Application
+          Name=VPN: chain off
+          Comment=Disconnect {{ vpn_chain_inner_name }}, then Proton VPN (if the chain started it)
+          Exec=/usr/local/bin/vpn-chain off
+          Icon=network-vpn-disconnected
+          Terminal=false
+          Categories=Network;
+          Keywords=vpn;proton;{{ vpn_chain_inner_name | lower }};chain;off;disconnect;
+
+    # --------------------------------------------------------------- firefox --
+    # Defaults for the laptop's own Firefox (deck has its own, stricter set). "default" status:
+    # these are starting values; you can still change them in Firefox, and Firefox Sync's
+    # settings take over once you sign in.
+    - name: Firefox policies directory
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop: [/etc/firefox, /etc/firefox/policies]
+
+    - name: Firefox defaults (search engine, dark pages)
+      ansible.builtin.copy:
+        dest: /etc/firefox/policies/policies.json
+        mode: "0644"
+        content: "{{ firefox_policies | to_nice_json }}\n"
+      vars:
+        firefox_policies:
+          policies:
+            SearchEngines:
+              Default: "{{ firefox_search_engine }}"
+            Preferences:
+              layout.css.prefers-color-scheme.content-override:
+                Value: "{{ 0 if firefox_dark_pages else 2 }}"
+                Status: default
+      when: firefox_search_engine | length > 0
+
+    # ---------------------------------------------------------------- sounds --
+    # gsd-power plays the charger plug/unplug sounds even with alert sounds off; a charger that
+    # drops out for a second near full charge made them repeat every half minute. This theme is
+    # Yaru without those two (libcanberra skips names with a .disabled file).
+    - name: Quiet sound theme (Yaru without charger plug/unplug)
+      ansible.builtin.copy:
+        src: sounds/golden-quiet
+        dest: /usr/local/share/sounds/
+        mode: preserve
+        directory_mode: "0755"
+
+    # ------------------------------------------------------------------ help --
+    - name: Golden-help command (lists the laptop's commands)
+      ansible.builtin.copy:
+        src: golden-help
+        dest: /usr/local/bin/golden-help
+        mode: "0755"
+
+    # Obsidian (Electron) dies with SIGTRAP when the session ends; harmless, so no crash dialog.
+    - name: Apport ignore-list directory
+      ansible.builtin.file:
+        path: /etc/apport/report-ignore
+        state: directory
+        mode: "0755"
+
+    - name: No crash dialogs for Obsidian's exit at logout
+      ansible.builtin.copy:
+        src: apport/report-ignore-obsidian
+        dest: /etc/apport/report-ignore/obsidian
+        mode: "0644"
 
     # ------------------------------------------------------------- firmware --
     - name: Firmware updates
@@ -773,6 +960,10 @@
     - name: Reload systemd
       ansible.builtin.systemd_service:
         daemon_reload: true
+
+    - name: Reload logind
+      ansible.builtin.command: systemctl kill -s HUP systemd-logind
+      changed_when: true
 
     - name: Restart freshclam
       ansible.builtin.systemd_service:

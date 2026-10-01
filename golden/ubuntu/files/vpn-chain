@@ -1,0 +1,98 @@
+#!/bin/bash
+# vpn-chain — double VPN: Proton VPN first, then a work VPN (NetworkManager) inside it, so the
+# work VPN's server sees a Proton address and not yours.
+#
+#   vpn-chain [COUNTRY]   Proton to COUNTRY (default from /etc/golden/vpn-chain.conf, EE) with its
+#                         kill switch on, then the work VPN through it; asks for its password
+#   vpn-chain off         work VPN down, then Proton down (only if vpn-chain connected it),
+#                         kill switch back to what it was
+#   vpn-chain status      what is connected, and whether the work VPN really goes through Proton
+set -uo pipefail
+COUNTRY=EE; INNER=work   # INNER: the work VPN's NetworkManager name, set in vpn-chain.conf
+# shellcheck disable=SC1091
+[[ -f /etc/golden/vpn-chain.conf ]] && . /etc/golden/vpn-chain.conf
+STATE="${XDG_RUNTIME_DIR:-/run/user/$UID}/vpn-chain.state"
+note() { echo "$2"; notify-send -a "VPN chain" -i network-vpn "$1" "$2" 2>/dev/null || true; }
+die() { note "VPN chain" "$*"; exit 1; }
+# Root for the route pin: sudo in a terminal, the graphical password/fingerprint prompt from a launcher.
+asroot() { if [[ -t 0 ]]; then sudo "$@"; else pkexec "$@"; fi; }
+inner_up() { nmcli -t -f NAME connection show --active | grep -qxF "$INNER"; }
+proton_server() { timeout 30 protonvpn status 2>/dev/null | sed -n 's/^Server: //p'; }
+gateway() { nmcli -g vpn.data connection show "$INNER" 2>/dev/null | tr ',' '\n' | sed -n 's/^ *gateway = //p'; }
+via_proton() { local gw; gw=$(gateway); [[ -n "$gw" ]] && ip route get "$gw" 2>/dev/null | grep -q ' dev proton'; }
+
+case "${1:-}" in
+off)
+    if inner_up; then nmcli connection down "$INNER" >/dev/null && echo "$INNER disconnected."; fi
+    proton_started=""; ks_before=""; pinned=""
+    # shellcheck disable=SC1090
+    [[ -f "$STATE" ]] && . "$STATE"
+    # shellcheck disable=SC2086
+    [[ -n "$pinned" ]] && asroot ip route del $pinned 2>/dev/null
+    if [[ -n "$proton_started" ]]; then
+        timeout 60 protonvpn disconnect >/dev/null 2>&1 && echo "Proton VPN disconnected."
+    fi
+    [[ -n "$ks_before" && "$ks_before" != standard ]] && timeout 30 protonvpn config set kill-switch "$ks_before" >/dev/null 2>&1
+    rm -f "$STATE"
+    note "VPN chain off" "$INNER and Proton VPN (if vpn-chain started it) are disconnected."
+    ;;
+status)
+    timeout 30 protonvpn status 2>/dev/null | grep -E '^(Status|Server):'
+    if inner_up; then
+        if via_proton; then echo "$INNER: connected, through Proton"; else echo "$INNER: connected, NOT through Proton"; fi
+    else echo "$INNER: not connected"; fi
+    ;;
+-h|--help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//' ;;
+*)
+    [[ -n "${1:-}" ]] && COUNTRY=$1
+    command -v protonvpn >/dev/null || die "Proton VPN is not installed."
+    nmcli -t -f NAME,TYPE connection show | grep -qxF "$INNER:vpn" || die "No VPN called $INNER (vpns: in the golden local.yml)."
+    inner_up && die "$INNER is already connected directly. Disconnect it first so it can go through Proton."
+    proton_started=""; ks_before=""
+    rm -f "$STATE"
+    st=$(timeout 30 protonvpn status 2>/dev/null || true)
+    if grep -q '^Status: Connected' <<< "$st"; then
+        note "Using the Proton VPN connection" "Already connected: $(proton_server). Not changing it."
+    else
+        note "VPN chain" "Connecting Proton VPN to $COUNTRY with kill switch..."
+        ks_before=$(timeout 30 protonvpn config list 2>/dev/null | awk '$1=="kill-switch"{print $2}')
+        [[ "$ks_before" == standard ]] || timeout 30 protonvpn config set kill-switch standard >/dev/null 2>&1 || true
+        if ! timeout 120 protonvpn connect --country "$COUNTRY" >/dev/null 2>&1; then
+            [[ -n "$ks_before" && "$ks_before" != standard ]] && timeout 30 protonvpn config set kill-switch "$ks_before" >/dev/null 2>&1
+            die "Proton VPN could not connect to $COUNTRY (signed in? protonvpn signin)."
+        fi
+        proton_started=1
+    fi
+    printf 'proton_started=%s\nks_before=%s\n' "$proton_started" "$ks_before" > "$STATE"
+    # NetworkManager pins a route to the work VPN's server via the Wi-Fi/Ethernet router, and
+    # Proton lets specific routes in the main table win over its own, so the work VPN would
+    # skip Proton. Pin that server to Proton's interface first (lowest metric wins); needs sudo.
+    gw=$(gateway); pdev=$(ip route get 1.1.1.1 2>/dev/null | grep -o 'dev [^ ]*' | cut -d' ' -f2)
+    [[ -n "$gw" && "$pdev" == proton* ]] || die "Could not find $INNER's server or Proton's interface. Run: vpn-chain off"
+    echo "Pinning $INNER's server ($gw) to Proton's interface $pdev (asks for your password)..."
+    asroot ip route replace "$gw/32" dev "$pdev" metric 0 || die "Could not pin the route. Run: vpn-chain off"
+    printf 'proton_started=%s\nks_before=%s\npinned=%q\n' "$proton_started" "$ks_before" "$gw/32 dev $pdev" > "$STATE"
+    via_proton || die "Traffic to $INNER's server would not go through Proton. Stopped; run: vpn-chain off"
+    echo "Connecting $INNER through Proton ($(proton_server)); enter its password in the dialog..."
+    if ! nmcli connection up "$INNER" >/dev/null; then
+        die "$INNER did not connect. Proton VPN is still up; run: vpn-chain off   (or try again)"
+    fi
+    # With Proton up, the work VPN's DNS servers never reach systemd-resolved, so work names
+    # went to Proton's DNS and failed. Give the work VPN's link its own
+    # servers, for its own domains only; everything else keeps resolving through Proton.
+    dev=$(nmcli -t -f GENERAL.IP-IFACE connection show "$INNER" 2>/dev/null | cut -d: -f2 | sed '/^$/d' | tail -n 1)
+    [[ -n "$dev" ]] || dev=$INNER
+    mapfile -t dns < <(nmcli -g IP4.DNS device show "$dev" 2>/dev/null | tr '|' '\n' | sed 's/ //g; /^$/d')
+    mapfile -t doms < <(nmcli -g IP4.DOMAIN device show "$dev" 2>/dev/null | tr '|' '\n' | sed 's/ //g; /^$/d; s/^/~/')
+    if (( ${#dns[@]} )); then
+        asroot resolvectl dns "$dev" "${dns[@]}" && asroot resolvectl domain "$dev" "${doms[@]:-~.}" \
+            || note "VPN chain warning" "Could not set $INNER's DNS; work names may not resolve."
+    fi
+    if via_proton; then
+        note "VPN chain up" "Proton $(proton_server) → $INNER. Undo with: vpn-chain off"
+    else
+        note "VPN chain warning" "$INNER is up but NOT through Proton. Run: vpn-chain off"
+        exit 1
+    fi
+    ;;
+esac
