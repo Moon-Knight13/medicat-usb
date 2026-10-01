@@ -14,6 +14,8 @@ COUNTRY=EE; INNER=DCM
 STATE="${XDG_RUNTIME_DIR:-/run/user/$UID}/vpn-chain.state"
 note() { echo "$2"; notify-send -a "VPN chain" -i network-vpn "$1" "$2" 2>/dev/null || true; }
 die() { note "VPN chain" "$*"; exit 1; }
+# Root for the route pin: sudo in a terminal, the graphical password/fingerprint prompt from a launcher.
+asroot() { if [[ -t 0 ]]; then sudo "$@"; else pkexec "$@"; fi; }
 inner_up() { nmcli -t -f NAME connection show --active | grep -qxF "$INNER"; }
 proton_server() { timeout 30 protonvpn status 2>/dev/null | sed -n 's/^Server: //p'; }
 gateway() { nmcli -g vpn.data connection show "$INNER" 2>/dev/null | tr ',' '\n' | sed -n 's/^ *gateway = //p'; }
@@ -26,7 +28,7 @@ off)
     # shellcheck disable=SC1090
     [[ -f "$STATE" ]] && . "$STATE"
     # shellcheck disable=SC2086
-    [[ -n "$pinned" ]] && sudo ip route del $pinned 2>/dev/null
+    [[ -n "$pinned" ]] && asroot ip route del $pinned 2>/dev/null
     if [[ -n "$proton_started" ]]; then
         timeout 60 protonvpn disconnect >/dev/null 2>&1 && echo "Proton VPN disconnected."
     fi
@@ -67,8 +69,8 @@ status)
     # skip Proton. Pin that server to Proton's interface first (lowest metric wins); needs sudo.
     gw=$(gateway); pdev=$(ip route get 1.1.1.1 2>/dev/null | grep -o 'dev [^ ]*' | cut -d' ' -f2)
     [[ -n "$gw" && "$pdev" == proton* ]] || die "Could not find $INNER's server or Proton's interface. Run: vpn-chain off"
-    echo "Pinning $INNER's server ($gw) to Proton's interface $pdev (sudo)..."
-    sudo ip route replace "$gw/32" dev "$pdev" metric 0 || die "Could not pin the route. Run: vpn-chain off"
+    echo "Pinning $INNER's server ($gw) to Proton's interface $pdev (asks for your password)..."
+    asroot ip route replace "$gw/32" dev "$pdev" metric 0 || die "Could not pin the route. Run: vpn-chain off"
     printf 'proton_started=%s\nks_before=%s\npinned=%q\n' "$proton_started" "$ks_before" "$gw/32 dev $pdev" > "$STATE"
     via_proton || die "Traffic to $INNER's server would not go through Proton. Stopped; run: vpn-chain off"
     echo "Connecting $INNER through Proton ($(proton_server)); enter its password in the dialog..."

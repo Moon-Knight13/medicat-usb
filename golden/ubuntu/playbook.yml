@@ -15,6 +15,7 @@
     golden_todo: []            # steps nothing unattended can do; shown by golden-status when finished
     golden_user: "{{ lookup('pipe', 'getent passwd 1000 | cut -d: -f1') }}"
     golden_home: "/home/{{ golden_user }}"
+    vpn_chain_inner_name: "{{ vpn_chain_inner | default((vpns | default([]) | first | default({})).name | default('DCM')) }}"
     golden_uid: "{{ lookup('pipe', 'getent passwd 1000 | cut -d: -f3') }}"
 
   pre_tasks:
@@ -727,14 +728,50 @@
         mode: "0644"
         content: |
           # Managed by golden/ubuntu/playbook.yml (vpn_chain_* in vars/apps.yml). Read by vpn-chain.
-          COUNTRY={{ vpn_chain_country }}
-          INNER={{ vpn_chain_inner | default((vpns | default([]) | first | default({})).name | default('DCM')) }}
+          COUNTRY={{ vpn_chain_countries[0].code }}
+          INNER={{ vpn_chain_inner_name }}
 
     - name: VPN chain command
       ansible.builtin.copy:
         src: vpn-chain
         dest: /usr/local/bin/vpn-chain
         mode: "0755"
+
+    # One launcher per country in vpn_chain_countries, plus "off": Super, type "VPN", click.
+    # (GNOME's own VPN menu only lists fixed NetworkManager profiles; Proton's are made fresh
+    # on each connect, so a chained entry cannot live there without a Shell extension.)
+    - name: VPN chain launchers
+      ansible.builtin.copy:
+        dest: "/usr/share/applications/golden-vpn-chain-{{ item.code | lower }}.desktop"
+        mode: "0644"
+        content: |
+          [Desktop Entry]
+          Type=Application
+          Name=VPN: Proton {{ item.name }} → {{ vpn_chain_inner_name }}
+          Comment=Double VPN: Proton VPN to {{ item.name }} (kill switch on), then {{ vpn_chain_inner_name }} through it
+          Exec=/usr/local/bin/vpn-chain {{ item.code }}
+          Icon=network-vpn
+          Terminal=false
+          Categories=Network;
+          Keywords=vpn;proton;{{ vpn_chain_inner_name | lower }};chain;double;
+      loop: "{{ vpn_chain_countries }}"
+      loop_control:
+        label: "{{ item.code }}"
+
+    - name: VPN chain "off" launcher
+      ansible.builtin.copy:
+        dest: /usr/share/applications/golden-vpn-chain-off.desktop
+        mode: "0644"
+        content: |
+          [Desktop Entry]
+          Type=Application
+          Name=VPN: chain off
+          Comment=Disconnect {{ vpn_chain_inner_name }}, then Proton VPN (if the chain started it)
+          Exec=/usr/local/bin/vpn-chain off
+          Icon=network-vpn-disconnected
+          Terminal=false
+          Categories=Network;
+          Keywords=vpn;proton;{{ vpn_chain_inner_name | lower }};chain;off;disconnect;
 
     # ---------------------------------------------------------------- sounds --
     # gsd-power plays the charger plug/unplug sounds even with alert sounds off; a charger that

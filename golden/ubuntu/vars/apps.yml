@@ -180,9 +180,13 @@ nvidia_container_toolkit: true
 # accept a finger (password always stays as fallback). Enrolling a finger is done by hand.
 fingerprint: true
 
-# vpn-chain: double VPN on demand. Proton VPN to this country (kill switch on), then the work
-# VPN (first entry of `vpns:` in local.yml, or vpn_chain_inner) inside it.
-vpn_chain_country: EE
+# vpn-chain: double VPN on demand. Proton VPN to a country (kill switch on), then the work VPN
+# (first entry of `vpns:` in local.yml, or vpn_chain_inner) inside it. Each country gets an app
+# launcher "VPN: Proton <name> → DCM"; the first is the default for plain `vpn-chain`.
+# Codes are Proton's (GB, not UK).
+vpn_chain_countries:
+  - { code: EE, name: Estonia }
+  - { code: GB, name: UK }
 
 # Lid closed while on mains power: nothing (keeps running, e.g. a download or a film to a TV)
 # or suspend. On battery the lid always suspends.

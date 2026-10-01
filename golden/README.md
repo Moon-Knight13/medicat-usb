@@ -68,7 +68,8 @@ Laptops installed earlier keep their enrolled VirtualBox key in the firmware unu
 - **Double VPN** (`vpn-chain`): Proton VPN to `vpn_chain_country` (EE) with its kill switch on,
   then the first `vpns:` entry (DCM) inside it, so the work VPN's server sees a Proton address.
   It checks that traffic to the work gateway really goes through Proton before and after
-  connecting. `vpn-chain off` undoes it in reverse order. If large transfers stall over the
+  connecting. `vpn-chain off` undoes it in reverse order. Launchers per country in
+  `vpn_chain_countries` (Estonia, UK) and "VPN: chain off": press Super and type "VPN". If large transfers stall over the
   double tunnel, lower the work VPN's MTU (e.g. 1300).
 - **Sign-ins stay manual** by design: GitHub CLI, Firefox, Discord, Spotify, Steam, Proton
   VPN, Obsidian Sync, Claude Code. Their tokens are the one thing a stick must not carry.
