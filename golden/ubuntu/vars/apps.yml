@@ -134,6 +134,7 @@ auto_update_origins:         # unattended-upgrades Origins-Pattern entries
 # the clean base; the weekly update does that too.
 # auto = half the CPUs / a quarter of the RAM, within the floor and cap.
 deck_vm: true
+deck_vpn_country: CH          # Proton VPN country for deck sessions (connected by `deck`, dropped after); "" = off
 deck_cpus: auto
 deck_memory_mb: auto
 deck_min_cpus: 2

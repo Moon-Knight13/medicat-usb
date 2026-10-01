@@ -1,7 +1,8 @@
 #!/bin/bash
 # deck — start the disposable media and browsing VM full screen.
 # Its disk is transient: everything done inside is thrown away when it stops.
-# Close the viewer window (or Power Off inside) to stop it. Ctrl+Alt releases the
+# Close the viewer window (or Power Off inside) to stop it. Connects Proton VPN first when
+# VPN_COUNTRY is set (deck_vpn_country in vars/apps.yml), and disconnects it after. Ctrl+Alt releases the
 # mouse and keyboard; Shift+F11 leaves full screen.
 set -euo pipefail
 C=qemu:///session; NAME=deck
@@ -9,6 +10,30 @@ note() { echo "$2"; notify-send -a deck -i computer "$1" "$2" 2>/dev/null || tru
 LOCK="${XDG_RUNTIME_DIR:-/run/user/$UID}/deck-busy"
 [[ -e "$LOCK" ]] && { note "deck is busy" "$(cat "$LOCK" 2>/dev/null || echo "deck is being built or updated"). Try again when it finishes."; exit 1; }
 virsh -c $C dominfo $NAME >/dev/null 2>&1 || { note "No deck yet" "Build it with: deck-create (about 15 minutes)"; exit 1; }
+
+# Proton VPN for the session (VPN_COUNTRY in /etc/golden/deck.conf; empty = off). If the VPN is
+# already up it is used as is; if deck connects it, deck disconnects it again afterwards. If it
+# cannot connect, deck does not start, so nothing goes out without it (deck --no-vpn to skip).
+VPN_COUNTRY=""; [[ -f /etc/golden/deck.conf ]] && VPN_COUNTRY=$(sed -n 's/^VPN_COUNTRY=//p' /etc/golden/deck.conf)
+vpn_started=""
+if [[ -n "$VPN_COUNTRY" && "${1:-}" != --no-vpn ]] && command -v protonvpn >/dev/null; then
+    st=$(timeout 30 protonvpn status 2>/dev/null || true)
+    if grep -q "^Status: Connected" <<< "$st"; then
+        grep -q "^Server: ${VPN_COUNTRY}#" <<< "$st" \
+            || note "VPN not in $VPN_COUNTRY" "Already connected: $(sed -n 's/^Server: //p' <<< "$st"). deck uses it as is."
+    else
+        note "Connecting Proton VPN" "Fastest server in $VPN_COUNTRY for deck..."
+        if timeout 120 protonvpn connect --country "$VPN_COUNTRY" >/dev/null 2>&1; then
+            vpn_started=1
+            note "Proton VPN connected" "$(timeout 30 protonvpn status 2>/dev/null | sed -n 's/^Server: //p')"
+        else
+            note "deck not started" "Proton VPN could not connect to $VPN_COUNTRY (signed in? protonvpn signin). Start without VPN: deck --no-vpn"
+            exit 1
+        fi
+    fi
+fi
+vpn_off() { [[ -n "$vpn_started" ]] && timeout 60 protonvpn disconnect >/dev/null 2>&1 && echo "Proton VPN disconnected."; true; }
+trap vpn_off EXIT
 [[ "$(virsh -c $C domstate $NAME 2>/dev/null)" == running ]] || virsh -c $C start $NAME >/dev/null
 # While deck's window is open the laptop must not dim, lock or suspend: video in the VM
 # is invisible to GNOME's own "media is playing" check.

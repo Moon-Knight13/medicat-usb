@@ -652,6 +652,7 @@
               DISK_MB={{ deck_disk_mb }}
               ISO=/opt/golden/ubuntu.iso
               ISO_URL={{ deck_iso_url }}
+              VPN_COUNTRY={{ deck_vpn_country | default('') }}
 
         - name: Kept ISO readable by deck-create (runs as the user)
           ansible.builtin.file:

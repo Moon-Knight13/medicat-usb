@@ -91,6 +91,10 @@ stops, with no snapshot to restore.
 
 - `deck`: start it full screen. Close the window (or Power Off inside) to stop and wipe it.
   Ctrl+Alt releases the mouse and keyboard; Shift+F11 leaves full screen.
+- Proton VPN: `deck` connects to the fastest server in `deck_vpn_country` (CH by default)
+  before starting, unless a VPN is already up, and disconnects afterwards if it connected it.
+  If the VPN cannot connect, deck does not start (`deck --no-vpn` skips it). Needs a one-time
+  `protonvpn signin`.
 - `deck-update`: install updates into its clean base (deck closed; about 2 minutes). The
   weekly update does this too.
 - `deck-create` / `deck-create --rebuild`: build it, or delete and build it again, from the ISO
