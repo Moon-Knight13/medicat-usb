@@ -1,0 +1,15 @@
+#!/bin/bash
+# deck-firstrun — run once at login by deck-firstrun.service: builds deck if this user has none
+# (the golden first boot runs before anyone has logged in, and deck needs the desktop session).
+set -uo pipefail
+virsh -c qemu:///session dominfo deck >/dev/null 2>&1 && exit 0
+[[ -w /dev/kvm ]] || exit 0          # kvm group not active yet: next login
+note() { notify-send -a deck -i computer "$@" 2>/dev/null || true; }
+LOCK="${XDG_RUNTIME_DIR:-/run/user/$UID}/deck-busy"; echo "deck is being built" > "$LOCK"; trap 'rm -f "$LOCK"' EXIT
+note "Building deck" "Making the disposable media and browsing VM in the background (about 15 minutes). You can keep working."
+log="$HOME/.local/state/deck/create.log"; mkdir -p "$(dirname "$log")"
+if /usr/local/bin/deck-create >"$log" 2>&1; then
+    note "deck is ready" "Start it with: deck   (everything inside is thrown away when it stops)"
+else
+    note -u critical "deck could not be built" "Details: $log   Try again with: deck-create"
+fi

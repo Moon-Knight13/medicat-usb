@@ -26,11 +26,6 @@ apt_repos:
     uri: https://packages.microsoft.com/repos/code
     suites: stable
     components: main
-  - name: virtualbox
-    key_url: https://www.virtualbox.org/download/oracle_vbox_2016.asc
-    uri: https://download.virtualbox.org/virtualbox/debian
-    suites: "{{ ansible_facts['distribution_release'] }}"
-    components: contrib
 
 # apt packages, grouped so a group is easy to drop.
 apt_packages:
@@ -76,7 +71,9 @@ apt_packages:
     - qemu-system-x86
     - libvirt-daemon-system
     - libvirt-clients
-    - virtualbox-7.2
+    - virt-manager               # also brings virt-install and virt-viewer (deck uses both)
+    - virt-viewer
+    - xorriso                    # deck-create: the autoinstall answers disc
   desktop:
     - flatpak
     - gnome-software-plugin-flatpak
@@ -116,7 +113,9 @@ claude_plugins: superpowers code-review commit-commands skill-creator frontend-d
 
 # Keep the laptop current after deployment (all on mains power only where it matters):
 #   apt: security + updates pockets and the third-party repos above, daily, no automatic reboot
-#   flatpak: weekly update. The recipe itself changes only when you run golden-update.sh.
+#   weekly (Monday or the first chance after, on mains power and idle 10+ min, with notifications):
+#     full apt upgrade, snaps, Flatpaks and deck's clean base (golden-weekly-update).
+#   The recipe itself changes only when you run golden-update.sh.
 auto_updates: true
 auto_update_origins:         # unattended-upgrades Origins-Pattern entries
   - "o=Ubuntu,a=${distro_codename}-security"
@@ -126,13 +125,14 @@ auto_update_origins:         # unattended-upgrades Origins-Pattern entries
   - "o=code stable"
   - "o=gh"
   - "o=HashiCorp"
-  - "o=Oracle Corporation"
   - "o=proton-gitlab"
 
-# "deck": a disposable browser VM in VirtualBox for research, made once per machine by
-# deck-create (minimal Ubuntu + Firefox from the golden ISO, snapshot "Ready"); deck-reset
-# throws away everything since the snapshot. auto = half the CPUs / a quarter of the RAM,
-# within the floor and cap.
+# "deck": a disposable media and browsing VM in KVM (per-user libvirt, sound straight to
+# PipeWire, 3D on the host GPU). Built once per user by deck-create, at the first login
+# (minimal Ubuntu, private Firefox, dark mode, from the golden ISO). Its disk is transient:
+# `deck` starts it and everything inside is thrown away when it stops. deck-update refreshes
+# the clean base; the weekly update does that too.
+# auto = half the CPUs / a quarter of the RAM, within the floor and cap.
 deck_vm: true
 deck_cpus: auto
 deck_memory_mb: auto
@@ -161,7 +161,7 @@ clamav_exclude_paths:               # regexes; big, churny or machine-generated 
   - ^/home/[^/]+/\.cache/
   - ^/home/[^/]+/\.local/share/Steam/
   - ^/home/[^/]+/snap/steam/
-  - ^/home/[^/]+/VirtualBox.VMs/
+  - ^/home/[^/]+/\.local/share/libvirt/images/
   - ^/home/[^/]+/\.local/share/containers/
   - ^/home/[^/]+/\.var/app/[^/]+/cache/
   - ^/home/[^/]+/Documents/my_notes/      # personal notes; sensitive text, false alarms not wanted
@@ -171,7 +171,6 @@ user_groups:
   - docker
   - libvirt
   - kvm
-  - vboxusers
 
 # NVIDIA: installed only when an NVIDIA GPU is detected.
 nvidia_container_toolkit: true

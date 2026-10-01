@@ -464,39 +464,62 @@
             state: started
           loop: [apt-daily.timer, apt-daily-upgrade.timer]
 
-        - name: Weekly Flatpak update units
+        # One weekly background update with notifications: Monday, or the first time after it
+        # that the laptop is on mains power and idle. apt (beyond the daily security run),
+        # snaps, Flatpaks and deck's clean base. Replaces the old weekly Flatpak-only timer.
+        - name: Weekly update program
+          ansible.builtin.copy:
+            src: golden-weekly-update
+            dest: /usr/local/sbin/golden-weekly-update
+            mode: "0755"
+
+        - name: Weekly update units
           ansible.builtin.copy:
             dest: "/etc/systemd/system/{{ item.name }}"
             mode: "0644"
             content: "{{ item.content }}"
           loop:
-            - name: golden-flatpak-update.service
+            - name: golden-weekly-update.service
               content: |
                 [Unit]
-                Description=Golden weekly Flatpak update
-                ConditionACPower=true
+                Description=Golden weekly update (runs only when due, on mains power and idle)
                 Wants=network-online.target
                 After=network-online.target
 
                 [Service]
                 Type=oneshot
                 Nice=10
-                ExecStart=/usr/bin/flatpak update --system --noninteractive --assumeyes
-            - name: golden-flatpak-update.timer
+                IOSchedulingClass=idle
+                ExecStart=/usr/local/sbin/golden-weekly-update
+            - name: golden-weekly-update.timer
               content: |
                 [Unit]
-                Description=Golden weekly Flatpak update
+                Description=Hourly check whether the weekly update is due
 
                 [Timer]
-                OnCalendar=weekly
+                OnCalendar=hourly
+                RandomizedDelaySec=10m
                 Persistent=true
-                RandomizedDelaySec=2h
 
                 [Install]
                 WantedBy=timers.target
           loop_control:
             label: "{{ item.name }}"
           notify: Reload systemd
+
+    - name: Old weekly Flatpak timer stopped (the weekly update covers Flatpaks)
+      ansible.builtin.systemd_service:
+        name: golden-flatpak-update.timer
+        enabled: false
+        state: stopped
+      failed_when: false
+
+    - name: Old weekly Flatpak units removed
+      ansible.builtin.file:
+        path: "/etc/systemd/system/{{ item }}"
+        state: absent
+      loop: [golden-flatpak-update.timer, golden-flatpak-update.service]
+      notify: Reload systemd
 
     - name: No weekly converge timer (dropped; laptops change only via golden-update.sh)
       ansible.builtin.systemd_service:
@@ -521,7 +544,7 @@
         enabled: "{{ item.wanted }}"
         state: "{{ 'started' if item.wanted else 'stopped' }}"
       loop:
-        - { name: golden-flatpak-update.timer, wanted: "{{ auto_updates }}" }
+        - { name: golden-weekly-update.timer, wanted: "{{ auto_updates }}" }
       loop_control:
         label: "{{ item.name }}"
 
@@ -562,39 +585,24 @@
             label: fingerprint
           when: fprint_reader and ('no fingers enrolled' in fprint.stdout)
 
-    # ---------------------------------------------------------- secure boot --
-    # VirtualBox builds and signs its modules with the machine's MOK, but enrolling that
-    # key needs a one-time password and a confirmation at the next boot: nothing unattended
-    # can do it. Leave a note that golden-status shows when the install has finished.
-    - name: Secure Boot state and VirtualBox module signing key
-      ansible.builtin.shell: |
-        set -o pipefail
-        grep -q '^vboxdrv ' /proc/modules && exit 0                       # loaded: nothing to do
-        mokutil --sb-state 2>/dev/null | grep -q 'SecureBoot enabled' || exit 0
-        [[ -f /var/lib/shim-signed/mok/MOK.der ]] || exit 0
-        # mokutil says "is already enrolled" or "is not enrolled"
-        mokutil --test-key /var/lib/shim-signed/mok/MOK.der 2>/dev/null | grep -q 'already enrolled' && exit 0
-        echo needs-enrolment
-      args:
-        executable: /bin/bash
-      register: mok_state
-      changed_when: false
-      when: "'virtualbox-7.2' in golden_packages"
+    # ----------------------------------------------------------- virtualbox --
+    # VirtualBox is no longer part of the recipe: deck runs on KVM (part of the kernel, so no
+    # out-of-tree modules and no Secure Boot key to enrol). Laptops installed earlier lose it here.
+    - name: VirtualBox removed (deck is KVM now)
+      ansible.builtin.apt:
+        name: [virtualbox-7.2]
+        state: absent
+        purge: true
+        autoremove: true
 
-    - name: Note the one-time key enrolment VirtualBox still needs
-      ansible.builtin.set_fact:
-        golden_todo: "{{ golden_todo + [item] }}"
-      loop:
-        - |-
-          VirtualBox cannot start VMs until its signing key is trusted (Secure Boot is on).
-          Once, at this laptop:  sudo mokutil --import /var/lib/shim-signed/mok/MOK.der
-          then reboot, choose "Enroll MOK" on the blue screen and enter the password you set.
-      loop_control:
-        label: VirtualBox signing key
-      when: mok_state.stdout | default('') == 'needs-enrolment'
+    - name: VirtualBox apt repository removed
+      ansible.builtin.deb822_repository:
+        name: virtualbox
+        state: absent
+      notify: Apt update
 
     # ----------------------------------------------------------------- deck --
-    - name: Disposable browser VM (deck)
+    - name: Disposable media and browsing VM (deck)
       when: deck_vm
       block:
         - name: Deck sizes
@@ -624,39 +632,73 @@
             src: "deck/{{ item }}"
             dest: "/usr/local/bin/{{ item }}"
             mode: "0755"
-          loop: [deck-create, deck-reset]
+          loop: [deck, deck-create, deck-update, deck-firstrun]
 
-        - name: Does deck exist already, and can VirtualBox run
-          ansible.builtin.shell: |
-            grep -q '^vboxdrv ' /proc/modules || { echo no-module; exit 0; }
-            sudo -u "{{ golden_user }}" VBoxManage showvminfo deck >/dev/null 2>&1 && echo exists || echo missing
-          args:
-            executable: /bin/bash
-          register: deck_state
-          changed_when: false
+        - name: Old VirtualBox deck command removed
+          ansible.builtin.file:
+            path: /usr/local/bin/deck-reset
+            state: absent
 
-        - name: Create deck now (unattended guest install, about 15 minutes)
-          ansible.builtin.command: /usr/local/bin/deck-create
-          become_user: "{{ golden_user }}"
-          when: deck_state.stdout == 'missing'
-          register: deck_create
-          changed_when: true
-          failed_when: false
+        - name: Directory for golden helper programs
+          ansible.builtin.file:
+            path: /usr/local/lib/golden
+            state: directory
+            mode: "0755"
 
-        - name: Why deck is not there yet
-          ansible.builtin.set_fact:
-            deck_why: "{{ ': VirtualBox cannot run until its signing key is enrolled (see above)' if deck_state.stdout == 'no-module' else '' }}"
+        - name: Deck guest-agent helper
+          ansible.builtin.copy:
+            src: deck/deck-agent
+            dest: /usr/local/lib/golden/deck-agent
+            mode: "0755"
 
-        - name: Note when deck could not be made yet
+        # deck is a per-user VM and needs the desktop session (PipeWire), so the first boot,
+        # which runs before anyone logs in, leaves the build to deck-firstrun at the first login.
+        - name: Deck first-login build unit
+          ansible.builtin.copy:
+            src: systemd-user/deck-firstrun.service
+            dest: /etc/systemd/user/deck-firstrun.service
+            mode: "0644"
+
+        - name: Deck first-login build enabled for every user
+          ansible.builtin.command: systemctl --global enable deck-firstrun.service
+          register: deck_unit
+          changed_when: "'Created symlink' in deck_unit.stderr"
+
+        - name: Does this user have a deck yet
+          ansible.builtin.stat:
+            path: "{{ golden_home }}/.local/share/libvirt/images/deck.qcow2"
+          register: deck_disk
+
+        - name: Note that deck is built at the next login
           ansible.builtin.set_fact:
             golden_todo: "{{ golden_todo + [item] }}"
           loop:
             - |-
-              deck (the disposable browser VM) is not made yet{{ deck_why }}.
-              When VirtualBox works:  deck-create   (about 15 minutes, unattended)   then:  deck-reset
+              deck (the disposable media and browsing VM) is built in the background at your next
+              login (about 15 minutes, with a notification when it is ready). Or now:  deck-create
           loop_control:
             label: deck
-          when: deck_state.stdout == 'no-module' or (deck_create is defined and deck_create.rc | default(0) != 0)
+          when: not deck_disk.stat.exists
+
+    # ------------------------------------------------------------------ help --
+    - name: Golden-help command (lists the laptop's commands)
+      ansible.builtin.copy:
+        src: golden-help
+        dest: /usr/local/bin/golden-help
+        mode: "0755"
+
+    # Obsidian (Electron) dies with SIGTRAP when the session ends; harmless, so no crash dialog.
+    - name: Apport ignore-list directory
+      ansible.builtin.file:
+        path: /etc/apport/report-ignore
+        state: directory
+        mode: "0755"
+
+    - name: No crash dialogs for Obsidian's exit at logout
+      ansible.builtin.copy:
+        src: apport/report-ignore-obsidian
+        dest: /etc/apport/report-ignore/obsidian
+        mode: "0644"
 
     # ------------------------------------------------------------- firmware --
     - name: Firmware updates

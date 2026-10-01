@@ -1,0 +1,24 @@
+#!/usr/bin/env python3
+"""deck-agent CMD [TIMEOUT] — run a shell command as root inside the deck VM through
+qemu-guest-agent, wait for it and print its output. Exit status is the command's."""
+import base64, json, subprocess, sys, time
+
+def agent(cmd):
+    r = subprocess.run(["virsh", "-c", "qemu:///session", "qemu-agent-command", "deck", json.dumps(cmd)],
+                       capture_output=True, text=True)
+    if r.returncode:
+        raise SystemExit(r.stderr.strip() or "guest agent not reachable")
+    return json.loads(r.stdout)["return"]
+
+pid = agent({"execute": "guest-exec",
+             "arguments": {"path": "/bin/sh", "arg": ["-c", sys.argv[1]], "capture-output": True}})["pid"]
+end = time.time() + (float(sys.argv[2]) if len(sys.argv) > 2 else 1800)
+while time.time() < end:
+    st = agent({"execute": "guest-exec-status", "arguments": {"pid": pid}})
+    if st.get("exited"):
+        for key in ("out-data", "err-data"):
+            if key in st:
+                sys.stdout.write(base64.b64decode(st[key]).decode(errors="replace"))
+        sys.exit(st.get("exitcode", 0))
+    time.sleep(2)
+raise SystemExit("timed out")

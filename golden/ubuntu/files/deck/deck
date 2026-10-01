@@ -1,0 +1,15 @@
+#!/bin/bash
+# deck — start the disposable media and browsing VM full screen.
+# Its disk is transient: everything done inside is thrown away when it stops.
+# Close the viewer window (or Power Off inside) to stop it. Ctrl+Alt releases the
+# mouse and keyboard; Shift+F11 leaves full screen.
+set -euo pipefail
+C=qemu:///session; NAME=deck
+note() { echo "$2"; notify-send -a deck -i computer "$1" "$2" 2>/dev/null || true; }
+LOCK="${XDG_RUNTIME_DIR:-/run/user/$UID}/deck-busy"
+[[ -e "$LOCK" ]] && { note "deck is busy" "$(cat "$LOCK" 2>/dev/null || echo "deck is being built or updated"). Try again when it finishes."; exit 1; }
+virsh -c $C dominfo $NAME >/dev/null 2>&1 || { note "No deck yet" "Build it with: deck-create (about 15 minutes)"; exit 1; }
+[[ "$(virsh -c $C domstate $NAME 2>/dev/null)" == running ]] || virsh -c $C start $NAME >/dev/null
+virt-viewer -c $C --attach --full-screen --wait $NAME || true
+virsh -c $C destroy $NAME >/dev/null 2>&1 || true
+echo "deck stopped; everything from that session is gone."

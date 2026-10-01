@@ -27,7 +27,7 @@ A wipe-and-encrypt Ubuntu desktop that ends up with your favourite apps and sett
 3. **Encryption**: choose "Encrypt with a passphrase" ("No encryption" is pre-selected)
    and set the passphrase, Next. You type
    it at every boot. This is the tested path (LVM inside LUKS2). Leave hardware-backed (TPM)
-   encryption alone: it is untested here and may not load the VirtualBox or NVIDIA modules.
+   encryption alone: it is untested here and may not load the NVIDIA modules.
 4. **Identity**: your name, username, password, Next.
 5. **Review**: check the installation disk, then Install. The install needs no network.
 6. When it says "installed and ready to use", choose Restart now and remove the stick
@@ -43,33 +43,12 @@ yours but not for a public repo, such as your git name and email. `build` copies
 stick with the rest of this folder and the first boot applies it from there. Without it,
 git is left in "ask me for an email" mode rather than guessing.
 
-### Manual step on every machine with Secure Boot: trust the VirtualBox signing key
+### Secure Boot
 
-VirtualBox builds its own kernel modules and signs them with a key made on the laptop
-(`/var/lib/shim-signed/mok/MOK.der`). With Secure Boot on, the firmware refuses those modules
-until that key is enrolled, which needs a one-time password and a confirmation at the next
-boot. Nothing unattended can do it, so the install finishes and `golden-status` says:
-
-```
-Still to do by hand:
-  VirtualBox cannot start VMs until its signing key is trusted (Secure Boot is on).
-  Once, at this laptop:  sudo mokutil --import /var/lib/shim-signed/mok/MOK.der
-  then reboot, choose "Enroll MOK" on the blue screen and enter the password you set.
-```
-
-Steps: run that `mokutil --import`, set a password, reboot. A blue "MOK management" screen
-appears (it times out in about 10 seconds): **Enroll MOK**, Continue, Yes, type the password,
-reboot. `VBoxManage --version` then prints only the version, and the note disappears at the
-next playbook run. Everything else (KVM, libvirt, Docker) works with Secure Boot on regardless.
-
-- **Fresh hardware**: always needed once per machine; the enrolment lives in that machine's
-  firmware.
-- **Reinstalling the same laptop**: the enrolment survives, but the reinstall makes a new key,
-  so enrol again. (The old key stays in the firmware unused; `mokutil --delete` removes it.)
-  Reusing one key across reinstalls would avoid this, at the cost of carrying the private key
-  on the stick; not done by default.
-- Choose "Enroll MOK", not "Enroll key from disk": the latter browses the EFI partition and
-  the key is not there.
+Nothing to do by hand: the recipe installs no out-of-tree kernel modules (deck runs on KVM,
+which is part of the kernel; VirtualBox was dropped), so there is no signing key to enrol.
+Laptops installed earlier keep their enrolled VirtualBox key in the firmware unused;
+`sudo mokutil --delete /var/lib/shim-signed/mok/MOK.der` removes it (confirm at the next boot).
 
 ### Continuing work on the new machine: SSH, projects, sign-ins
 
@@ -100,28 +79,33 @@ next playbook run. Everything else (KVM, libvirt, Docker) works with Secure Boot
 plugin, pinned by version and installer checksum in `files/claude-setup.sh`. Run `claude` once
 to sign in. (The VS Code extension is not installed; everything is CLI.)
 
-### deck: a disposable browser VM
+### deck: a disposable media and browsing VM
 
-For research that should leave no trace on the laptop. `deck-create` builds a VirtualBox VM
-called `deck` (minimal Ubuntu with Firefox, throwaway login `deck`/`deck`, no shared folders
-or clipboard) from the Ubuntu ISO the install kept at `/opt/golden/ubuntu.iso`, then snapshots
-it as "Ready". About 15 minutes, unattended. Sizes scale to the host (half the CPUs, a quarter
-of the RAM, within `deck_*` in `vars/apps.yml`).
+For watching media and for research that should leave no trace on the laptop. `deck` is a
+per-user KVM VM (`qemu:///session`): minimal Ubuntu, dark mode, private Firefox (DuckDuckGo,
+uBlock Origin, strict tracking protection, HTTPS-only, no password saving, no onboarding),
+throwaway login `deck`/`deck`, no clipboard or shared folders, no microphone. Sound goes
+straight into your PipeWire and video uses 3D on the host GPU (virtio-gpu with virgl), so
+media plays in sync. Its disk is **transient**: whatever happens inside is thrown away when it
+stops, with no snapshot to restore.
 
-- `deck-reset`: throw away everything since the last snapshot and start it. Use this every time.
-  It opens full screen (Host+F toggles) and logs straight in; no wizard, no login screen.
-- `deck-create --rebuild`: delete it and make it again, for example after this recipe changes.
-- To update the guest: start it, update inside, then `VBoxManage snapshot deck take "updated <month>"`.
-- The first boot creates it when VirtualBox can run. On a Secure Boot machine that is only
-  after the key enrolment above, so the finish note says to run `deck-create` yourself.
+- `deck`: start it full screen. Close the window (or Power Off inside) to stop and wipe it.
+  Ctrl+Alt releases the mouse and keyboard; Shift+F11 leaves full screen.
+- `deck-update`: install updates into its clean base (deck closed; about 2 minutes). The
+  weekly update does this too.
+- `deck-create` / `deck-create --rebuild`: build it, or delete and build it again, from the ISO
+  the install kept at `/opt/golden/ubuntu.iso`. About 15 minutes, unattended. Sizes scale to the
+  host (half the CPUs, a quarter of the RAM, within `deck_*` in `vars/apps.yml`).
+- It is built in the background at your first login (it needs your desktop session for sound),
+  with a notification when ready. Until then the finish note mentions it.
 
 ### Staying current after deployment
 
 | What | How | When |
 |---|---|---|
-| Ubuntu security and updates, plus the third-party repos (VS Code, Docker, GitHub CLI, Terraform, VirtualBox, Proton) | unattended-upgrades, `auto_update_origins` in `vars/apps.yml` | daily, never reboots by itself |
+| Ubuntu security and updates, plus the third-party repos (VS Code, Docker, GitHub CLI, Terraform, Proton) | unattended-upgrades, `auto_update_origins` in `vars/apps.yml` | daily, never reboots by itself |
+| Everything else, in one go: full apt upgrade, snaps, Flatpaks, deck's clean base | `golden-weekly-update.timer`, with a notification at start and end (and if a restart is needed) | weekly: Monday, or the first chance after, when on mains power and idle 10+ minutes |
 | Snaps (Firefox, Spotify, Steam) | snapd | several times a day |
-| Flatpaks (Bambu Studio) | `golden-flatpak-update.timer` | weekly, on mains power |
 | Discord, Obsidian | update themselves | on launch |
 | ClamAV signatures | freshclam | 4 times a day |
 | Firmware and BIOS | fwupd metadata daily; updates listed by `golden-status`, applied by you | daily |
