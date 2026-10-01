@@ -93,6 +93,8 @@ stops, with no snapshot to restore.
   Ctrl+Alt releases the mouse and keyboard; Shift+F11 leaves full screen.
 - Proton VPN: `deck` connects to the fastest server in `deck_vpn_country` (CH by default)
   before starting, unless a VPN is already up, and disconnects afterwards if it connected it.
+  While deck's VPN is up the kill switch is on (internet blocked if the VPN drops); the previous
+  kill-switch setting comes back afterwards.
   If the VPN cannot connect, deck does not start (`deck --no-vpn` skips it). Needs a one-time
   `protonvpn signin`.
 - `deck-update`: install updates into its clean base (deck closed; about 2 minutes). The

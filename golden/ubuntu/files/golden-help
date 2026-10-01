@@ -14,7 +14,7 @@ Golden laptop commands
     deck                     Start it full screen. Close the window (or Power Off inside) to stop;
                              everything from the session is thrown away
                              (Ubuntu, dark; Firefox with DuckDuckGo and uBlock Origin; user deck / password deck)
-                             Connects Proton VPN (Switzerland) first, disconnects after; won't start
+                             Connects Proton VPN (Switzerland) with kill switch first, disconnects after; won't start
                              without it. deck --no-vpn skips the VPN
     deck-update              Install updates into its clean base (deck closed; about 2 minutes).
                              Also done by the weekly update (below)

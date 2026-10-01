@@ -22,19 +22,33 @@ if [[ -n "$VPN_COUNTRY" && "${1:-}" != --no-vpn ]] && command -v protonvpn >/dev
         grep -q "^Server: ${VPN_COUNTRY}#" <<< "$st" \
             || note "VPN not in $VPN_COUNTRY" "Already connected: $(sed -n 's/^Server: //p' <<< "$st"). deck uses it as is."
     else
-        note "Connecting Proton VPN" "Fastest server in $VPN_COUNTRY for deck..."
+        note "Connecting Proton VPN" "Fastest server in $VPN_COUNTRY for deck, with kill switch..."
+        # Kill switch for the session: if the VPN drops, the internet is blocked instead of
+        # falling back to the normal connection. The previous setting comes back afterwards.
+        ks_before=$(timeout 30 protonvpn config list 2>/dev/null | awk '$1=="kill-switch"{print $2}')
+        [[ "$ks_before" == standard ]] || timeout 30 protonvpn config set kill-switch standard >/dev/null 2>&1 || true
         if timeout 120 protonvpn connect --country "$VPN_COUNTRY" >/dev/null 2>&1; then
             vpn_started=1
             note "Proton VPN connected" "$(timeout 30 protonvpn status 2>/dev/null | sed -n 's/^Server: //p')"
         else
+            [[ -n "$ks_before" && "$ks_before" != standard ]] && timeout 30 protonvpn config set kill-switch "$ks_before" >/dev/null 2>&1
             note "deck not started" "Proton VPN could not connect to $VPN_COUNTRY (signed in? protonvpn signin). Start without VPN: deck --no-vpn"
             exit 1
         fi
     fi
 fi
-vpn_off() { [[ -n "$vpn_started" ]] && timeout 60 protonvpn disconnect >/dev/null 2>&1 && echo "Proton VPN disconnected."; true; }
+vpn_off() {
+    [[ -n "$vpn_started" ]] || return 0
+    timeout 60 protonvpn disconnect >/dev/null 2>&1 && echo "Proton VPN disconnected."
+    [[ -n "${ks_before:-}" && "$ks_before" != standard ]] && timeout 30 protonvpn config set kill-switch "$ks_before" >/dev/null 2>&1
+    true
+}
 trap vpn_off EXIT
 [[ "$(virsh -c $C domstate $NAME 2>/dev/null)" == running ]] || virsh -c $C start $NAME >/dev/null
+# GNOME would ask every time whether virt-viewer may capture keyboard shortcuts; answer "no"
+# once (the laptop's Super, Alt+Tab etc. keep working; Ctrl+Alt still releases the VM).
+gdbus call --session --dest org.freedesktop.impl.portal.PermissionStore --object-path /org/freedesktop/impl/portal/PermissionStore \
+    --method org.freedesktop.impl.portal.PermissionStore.SetPermission gnome true shortcuts-inhibitor virt-viewer "['DENIED']" >/dev/null 2>&1 || true
 # While deck's window is open the laptop must not dim, lock or suspend: video in the VM
 # is invisible to GNOME's own "media is playing" check.
 gnome-session-inhibit --inhibit idle:suspend --reason "deck is open" \
