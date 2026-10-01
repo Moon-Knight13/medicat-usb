@@ -60,7 +60,7 @@ virt-install --connect "$C" --name "$NAME" --memory "$MEMORY_MB" --vcpus "$CPUS"
     --disk "path=$WORK/seed.iso,device=cdrom" \
     --location "$ISO,kernel=casper/vmlinuz,initrd=casper/initrd" --extra-args "autoinstall --- quiet" \
     --network user,model=virtio --graphics spice --video virtio --sound ich9 \
-    --noautoconsole --wait 0 >/dev/null
+    --noautoconsole --wait 0 >/dev/null 2> >(grep -v "^WARNING\|^Please file a bug" >&2)
 echo "Installing the guest (hidden). This takes about 15 minutes; waiting..."
 for (( i = 0; i < 240; i++ )); do
     sleep 15
