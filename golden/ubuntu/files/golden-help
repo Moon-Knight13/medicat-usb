@@ -1,6 +1,7 @@
 #!/bin/bash
 # golden-help — list the commands a golden laptop has and what they do.
-cat <<'TXT'
+WORK=$(sed -n 's/^INNER=//p' /etc/golden/vpn-chain.conf 2>/dev/null); WORK=${WORK:-work VPN}
+sed "s/\$WORK/$WORK/g" <<'TXT'
 Golden laptop commands
 
   Laptop and recipe
@@ -28,13 +29,13 @@ Golden laptop commands
                              starts and ends, and if a restart is needed. Log: /var/log/golden-weekly-update.log
     Run it now               sudo systemctl start golden-weekly-update   (still waits for idle and mains)
 
-  VPN
-    vpn-chain [COUNTRY]      Double VPN: Proton (default Estonia, kill switch on), then DCM through it
-    vpn-chain-ee             Same as vpn-chain EE: Proton Estonia → DCM
-    vpn-chain-gb             Same as vpn-chain GB: Proton UK → DCM
-                             Also as launchers: Super, type "VPN": Proton Estonia → DCM, Proton UK → DCM, chain off
-    vpn-chain off            DCM down, then Proton down; kill switch back as it was
-    vpn-chain status         What is connected, and whether DCM really goes through Proton
+  VPN  (work VPN here: $WORK, from vpns: in the golden local.yml)
+    vpn-chain [COUNTRY]      Double VPN: Proton (default Estonia, kill switch on), then $WORK through it
+    vpn-chain-ee             Same as vpn-chain EE: Proton Estonia → $WORK
+    vpn-chain-gb             Same as vpn-chain GB: Proton UK → $WORK
+                             Also as launchers: Super, type "VPN"
+    vpn-chain off            $WORK down, then Proton down; kill switch back as it was
+    vpn-chain status         What is connected, and whether $WORK really goes through Proton
     protonvpn connect --country CH / protonvpn disconnect / protonvpn status
 
   Power

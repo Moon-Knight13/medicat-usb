@@ -3,12 +3,12 @@
 # work VPN's server sees a Proton address and not yours.
 #
 #   vpn-chain [COUNTRY]   Proton to COUNTRY (default from /etc/golden/vpn-chain.conf, EE) with its
-#                         kill switch on, then the work VPN (DCM) through it; asks for its password
+#                         kill switch on, then the work VPN through it; asks for its password
 #   vpn-chain off         work VPN down, then Proton down (only if vpn-chain connected it),
 #                         kill switch back to what it was
 #   vpn-chain status      what is connected, and whether the work VPN really goes through Proton
 set -uo pipefail
-COUNTRY=EE; INNER=DCM
+COUNTRY=EE; INNER=work   # INNER: the work VPN's NetworkManager name, set in vpn-chain.conf
 # shellcheck disable=SC1091
 [[ -f /etc/golden/vpn-chain.conf ]] && . /etc/golden/vpn-chain.conf
 STATE="${XDG_RUNTIME_DIR:-/run/user/$UID}/vpn-chain.state"
@@ -76,6 +76,17 @@ status)
     echo "Connecting $INNER through Proton ($(proton_server)); enter its password in the dialog..."
     if ! nmcli connection up "$INNER" >/dev/null; then
         die "$INNER did not connect. Proton VPN is still up; run: vpn-chain off   (or try again)"
+    fi
+    # With Proton up, the work VPN's DNS servers never reach systemd-resolved, so work names
+    # went to Proton's DNS and failed. Give the work VPN's link its own
+    # servers, for its own domains only; everything else keeps resolving through Proton.
+    dev=$(nmcli -t -f GENERAL.IP-IFACE connection show "$INNER" 2>/dev/null | cut -d: -f2 | sed '/^$/d' | tail -n 1)
+    [[ -n "$dev" ]] || dev=$INNER
+    mapfile -t dns < <(nmcli -g IP4.DNS device show "$dev" 2>/dev/null | tr '|' '\n' | sed 's/ //g; /^$/d')
+    mapfile -t doms < <(nmcli -g IP4.DOMAIN device show "$dev" 2>/dev/null | tr '|' '\n' | sed 's/ //g; /^$/d; s/^/~/')
+    if (( ${#dns[@]} )); then
+        asroot resolvectl dns "$dev" "${dns[@]}" && asroot resolvectl domain "$dev" "${doms[@]:-~.}" \
+            || note "VPN chain warning" "Could not set $INNER's DNS; work names may not resolve."
     fi
     if via_proton; then
         note "VPN chain up" "Proton $(proton_server) → $INNER. Undo with: vpn-chain off"

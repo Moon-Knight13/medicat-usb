@@ -15,7 +15,7 @@
     golden_todo: []            # steps nothing unattended can do; shown by golden-status when finished
     golden_user: "{{ lookup('pipe', 'getent passwd 1000 | cut -d: -f1') }}"
     golden_home: "/home/{{ golden_user }}"
-    vpn_chain_inner_name: "{{ vpn_chain_inner | default((vpns | default([]) | first | default({})).name | default('DCM')) }}"
+    vpn_chain_inner_name: "{{ vpn_chain_inner | default((vpns | default([]) | first | default({})).name | default('work')) }}"
     golden_uid: "{{ lookup('pipe', 'getent passwd 1000 | cut -d: -f3') }}"
 
   pre_tasks:
@@ -786,6 +786,33 @@
           Terminal=false
           Categories=Network;
           Keywords=vpn;proton;{{ vpn_chain_inner_name | lower }};chain;off;disconnect;
+
+    # --------------------------------------------------------------- firefox --
+    # Defaults for the laptop's own Firefox (deck has its own, stricter set). "default" status:
+    # these are starting values; you can still change them in Firefox, and Firefox Sync's
+    # settings take over once you sign in.
+    - name: Firefox policies directory
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop: [/etc/firefox, /etc/firefox/policies]
+
+    - name: Firefox defaults (search engine, dark pages)
+      ansible.builtin.copy:
+        dest: /etc/firefox/policies/policies.json
+        mode: "0644"
+        content: "{{ firefox_policies | to_nice_json }}\n"
+      vars:
+        firefox_policies:
+          policies:
+            SearchEngines:
+              Default: "{{ firefox_search_engine }}"
+            Preferences:
+              layout.css.prefers-color-scheme.content-override:
+                Value: "{{ 0 if firefox_dark_pages else 2 }}"
+                Status: default
+      when: firefox_search_engine | length > 0
 
     # ---------------------------------------------------------------- sounds --
     # gsd-power plays the charger plug/unplug sounds even with alert sounds off; a charger that

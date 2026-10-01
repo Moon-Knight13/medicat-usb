@@ -180,9 +180,14 @@ nvidia_container_toolkit: true
 # accept a finger (password always stays as fallback). Enrolling a finger is done by hand.
 fingerprint: true
 
+# The laptop's own Firefox: default search engine ("" = leave Firefox's) and dark web pages
+# (the browser itself already follows the dark desktop). Starting values; changeable in Firefox.
+firefox_search_engine: DuckDuckGo
+firefox_dark_pages: true
+
 # vpn-chain: double VPN on demand. Proton VPN to a country (kill switch on), then the work VPN
 # (first entry of `vpns:` in local.yml, or vpn_chain_inner) inside it. Each country gets an app
-# launcher "VPN: Proton <name> → DCM"; the first is the default for plain `vpn-chain`.
+# launcher "VPN: Proton <name> → <work VPN>"; the first is the default for plain `vpn-chain`.
 # Codes are Proton's (GB, not UK).
 vpn_chain_countries:
   - { code: EE, name: Estonia }

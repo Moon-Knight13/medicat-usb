@@ -66,14 +66,17 @@ Laptops installed earlier keep their enrolled VirtualBox key in the firmware unu
   username). They appear in the panel menu; switch one on and enter your password. Nothing
   secret is stored.
 - **Double VPN** (`vpn-chain`): Proton VPN to `vpn_chain_country` (EE) with its kill switch on,
-  then the first `vpns:` entry (DCM) inside it, so the work VPN's server sees a Proton address.
+  then the first `vpns:` entry (your work VPN) inside it, so the work VPN's server sees a Proton address.
   It checks that traffic to the work gateway really goes through Proton before and after
-  connecting. `vpn-chain off` undoes it in reverse order. Launchers per country in
+  connecting, and gives the work VPN's DNS servers its own domains (with Proton up they never
+  reached the resolver, so work names failed). `vpn-chain off` undoes it in reverse order. Launchers per country in
   `vpn_chain_countries` (Estonia, UK) and "VPN: chain off": press Super and type "VPN". Short
   commands per country too: `vpn-chain-ee`, `vpn-chain-gb`. If large transfers stall over the
   double tunnel, lower the work VPN's MTU (e.g. 1300).
 - **Sign-ins stay manual** by design: GitHub CLI, Firefox, Discord, Spotify, Steam, Proton
   VPN, Obsidian Sync, Claude Code. Their tokens are the one thing a stick must not carry.
+- **Firefox defaults**: DuckDuckGo as the search engine and dark web pages
+  (`firefox_search_engine`, `firefox_dark_pages`), as starting values you can change.
 - **Firefox**: signing in to the Firefox account restores bookmarks, add-ons (Bitwarden,
   Proton Pass, FoxyProxy and the rest, including which are disabled) and settings through
   Firefox Sync; history and passwords are not synced by choice. Then sign in to Bitwarden and
