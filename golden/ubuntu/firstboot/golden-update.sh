@@ -44,7 +44,6 @@ fb=/opt/golden/ubuntu/firstboot
 install -m 0755 "$fb/golden-firstboot.sh" /usr/local/sbin/golden-firstboot.sh
 install -m 0644 "$fb/golden-firstboot.service" /etc/systemd/system/golden-firstboot.service
 install -m 0755 "$fb/golden-status" /usr/local/bin/golden-status
-install -m 0755 "$fb/golden-projects" /usr/local/bin/golden-projects
 install -D -m 0644 "$fb/golden-status.desktop" /etc/xdg/autostart/golden-status.desktop
 printf 'GOLDEN_REPO=%s\nGOLDEN_BRANCH=%s\n' "$REPO" "$BRANCH" > /etc/default/golden
 [[ "$BRANCH" == main ]] || echo "NOTE: this laptop now follows branch '$BRANCH' weekly, which has no branch protection; switch back with: golden-update.sh main"

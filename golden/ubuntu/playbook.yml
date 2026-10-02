@@ -326,26 +326,10 @@
         label: "{{ item.name }}"
       notify: Reload NetworkManager connections
 
-    - name: Projects (public repositories now; private and ssh ones after the key is authorised)
-      ansible.builtin.command: /usr/local/bin/golden-projects
-      become_user: "{{ golden_user }}"
-      register: projects_result
-      changed_when: "'cloned ' in projects_result.stdout"
-      failed_when: false
-      when: projects | default([]) | length > 0
-
-    - name: Note the projects still to clone
-      ansible.builtin.set_fact:
-        golden_todo: "{{ golden_todo + [item] }}"
-      loop:
-        - |-
-          Repositories that need access first (see above), then:  golden-projects
-          {% for line in projects_result.stdout_lines | select('search', '^not yet:') %}
-            {{ line | regex_replace('^not yet: (\S+).*', '\1') }}
-          {% endfor %}
-      loop_control:
-        label: projects
-      when: projects_result is defined and projects_result.rc | default(0) != 0
+    - name: Remove golden-projects (dropped; clone repositories when needed)
+      ansible.builtin.file:
+        path: /usr/local/bin/golden-projects
+        state: absent
 
     - name: Dotfiles
       ansible.builtin.copy:

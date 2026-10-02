@@ -43,7 +43,6 @@ autoinstall:
     # Progress window at login until the first boot has finished; `golden-status` any time.
     - install -m 0755 /target/opt/golden/ubuntu/firstboot/golden-status /target/usr/local/bin/golden-status
     - install -D -m 0644 /target/opt/golden/ubuntu/firstboot/golden-status.desktop /target/etc/xdg/autostart/golden-status.desktop
-    - install -m 0755 /target/opt/golden/ubuntu/firstboot/golden-projects /target/usr/local/bin/golden-projects
     # Keep a copy of this ISO for deck-create (the disposable browser VM). /cdrom is the
     # install medium: the ISO mapped by Ventoy on the stick, or the DVD in a VM.
     - cp "$(findmnt -no SOURCE /cdrom)" /target/opt/golden/ubuntu.iso && chmod 0644 /target/opt/golden/ubuntu.iso || rm -f /target/opt/golden/ubuntu.iso

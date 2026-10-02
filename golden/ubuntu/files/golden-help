@@ -17,7 +17,6 @@ Golden laptop commands   (golden-help shows this list)
     golden-update              Update this laptop from the recipe on GitHub (asks for your password)
     golden-update <branch>     Same, from a branch: to try a change before merging it
     golden-update --preferences   Also re-apply desktop, VS Code and git/ssh settings
-    golden-projects            Clone the repositories listed in your golden settings
 
   Automatic updates
     Daily                      Security updates (silent, never restarts the laptop)
