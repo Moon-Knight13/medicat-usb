@@ -1,0 +1,15 @@
+#!/bin/bash
+# mictest — live level of the default microphone, once a second. Talk and watch the bar move;
+# a level that never changes means the mic is not hearing anything. Ctrl+C to stop.
+src=$(wpctl inspect @DEFAULT_AUDIO_SOURCE@ 2>/dev/null | sed -n 's/.*node.description = "\(.*\)"/\1/p')
+echo "Microphone: ${src:-unknown}   (change it in Settings → Sound → Input)"
+trap 'echo; exit 0' INT
+while true; do
+    lvl=$(timeout 1 pw-record --channels 1 --format s16 --rate 48000 - 2>/dev/null | python3 -c '
+import sys, array, math
+a = array.array("h", sys.stdin.buffer.read()[44:])
+m = sum(a) / max(len(a), 1)
+print(int(math.sqrt(sum((x - m) ** 2 for x in a) / max(len(a), 1))))' 2>/dev/null)
+    lvl=${lvl:-0}; bars=$(( lvl / 200 > 60 ? 60 : lvl / 200 ))
+    printf '%s  level %6s  %s\n' "$(date +%T)" "$lvl" "$(printf '%*s' "$bars" '' | tr ' ' '#')"
+done

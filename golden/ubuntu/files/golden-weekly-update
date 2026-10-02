@@ -1,0 +1,48 @@
+#!/bin/bash
+# golden-weekly-update — the laptop's weekly background update, with notifications.
+# Run hourly by golden-weekly-update.timer. Does nothing until all of these hold:
+#   - no successful run since the most recent Monday 00:00 (so: Monday, or the first chance after),
+#   - on mains power,
+#   - nobody has touched the keyboard or mouse for 10+ minutes.
+# Then: apt full upgrade, snaps, Flatpaks, and deck's clean base (deck-update). Notifies when it
+# starts and ends, and says if a reboot is needed. Security updates still also arrive daily
+# through unattended-upgrades; this catches everything else up. Log: /var/log/golden-weekly-update.log
+set -uo pipefail
+STAMP=/var/lib/golden/weekly-update-last
+LOG=/var/log/golden-weekly-update.log
+IDLE_MIN=${GOLDEN_IDLE_MINUTES:-10}
+USER_NAME=$(getent passwd 1000 | cut -d: -f1); USER_UID=1000
+as_user() { runuser -u "$USER_NAME" -- env XDG_RUNTIME_DIR=/run/user/$USER_UID \
+            DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$USER_UID/bus "$@"; }
+note() { as_user notify-send -a "Golden update" -i system-software-update "$@" 2>/dev/null || true; }
+
+monday=$(date -d "$( [[ $(date +%u) == 1 ]] && echo today || echo 'last monday' ) 00:00" +%s)
+last=$(cat "$STAMP" 2>/dev/null || echo 0)
+(( last < monday )) || exit 0
+grep -qx 1 /sys/class/power_supply/A*/online 2>/dev/null || { echo "not on mains power; later"; exit 0; }
+[[ -S /run/user/$USER_UID/bus ]] || { echo "nobody logged in; later"; exit 0; }
+idle_ms=$(as_user gdbus call --session --dest org.gnome.Mutter.IdleMonitor --object-path /org/gnome/Mutter/IdleMonitor/Core \
+          --method org.gnome.Mutter.IdleMonitor.GetIdletime 2>/dev/null | grep -oE '[0-9]+' | tail -1)
+(( ${idle_ms:-0} >= IDLE_MIN * 60000 )) || { echo "laptop in use; later"; exit 0; }
+
+note "Weekly update started" "Updating Ubuntu, apps and deck in the background while the laptop is idle. Keep working if you like; deck can't be opened until it finishes."
+exec >>"$LOG" 2>&1; echo "=== $(date -Is) weekly update"
+ok=1; summary=()
+export DEBIAN_FRONTEND=noninteractive
+if apt-get -q update && apt-get -qy -o Dpkg::Options::=--force-confold full-upgrade && apt-get -qy autoremove; then
+    summary+=("system packages")
+else ok=0; fi
+snap refresh && summary+=("snaps") || ok=0
+if command -v flatpak >/dev/null; then flatpak update --system --noninteractive --assumeyes && summary+=("Flatpaks") || ok=0; fi
+if [[ -x /usr/local/bin/deck-update ]] && as_user virsh -c qemu:///session dominfo deck >/dev/null 2>&1; then
+    if [[ "$(as_user virsh -c qemu:///session domstate deck)" == "shut off" ]]; then
+        as_user /usr/local/bin/deck-update && summary+=("deck") || ok=0
+    else echo "deck is running; its update waits for next week (or run deck-update)"; fi
+fi
+reboot=""; [[ -f /var/run/reboot-required ]] && reboot=" A restart is needed to finish (kernel or system library update)."
+if (( ok )); then
+    date +%s > "$STAMP"
+    note "Weekly update finished" "Updated: $(IFS=,; echo "${summary[*]}" | sed 's/,/, /g').$reboot"
+else
+    note -u critical "Weekly update had a problem" "Updated: ${summary[*]:-nothing}. It retries next hour when idle. Log: $LOG$reboot"
+fi

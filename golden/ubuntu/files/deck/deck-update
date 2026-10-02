@@ -1,0 +1,30 @@
+#!/bin/bash
+# deck-update — install updates into deck's clean base, so later sessions start current.
+# Turns the transient disk off, boots the VM hidden, runs apt and snap updates through the
+# guest agent, shuts it down and turns transient back on. About 2 minutes; deck must be closed.
+# The weekly background update (golden-weekly-update) runs this too, when the laptop is idle.
+set -euo pipefail
+C=qemu:///session; NAME=deck
+vs() { virsh -c $C "$@"; }
+agent() { /usr/local/lib/golden/deck-agent "$@"; }
+transient() {  # on|off
+    local x; x=$(mktemp); vs dumpxml --inactive $NAME | sed '/<transient\/>/d' > "$x"
+    [[ $1 == on ]] && sed -i "0,/<target dev='vda' bus='virtio'\/>/s//<target dev='vda' bus='virtio'\/>\n      <transient\/>/" "$x"
+    vs define "$x" >/dev/null; rm -f "$x"
+}
+vs dominfo $NAME >/dev/null 2>&1 || { echo "No deck yet: deck-create"; exit 1; }
+[[ "$(vs domstate $NAME)" == "shut off" ]] || { echo "Close deck first (it is running)."; exit 1; }
+LOCK="${XDG_RUNTIME_DIR:-/run/user/$UID}/deck-busy"; echo "deck is installing updates" > "$LOCK"
+trap 'vs destroy $NAME >/dev/null 2>&1 || true; transient on; rm -f "$LOCK"' EXIT
+transient off
+vs start $NAME >/dev/null
+echo "Waiting for deck to boot..."
+for _ in $(seq 1 60); do agent true 10 >/dev/null 2>&1 && break; sleep 3; done
+echo "Updating packages (apt)..."
+agent 'export DEBIAN_FRONTEND=noninteractive; apt-get -qq update && apt-get -y -qq full-upgrade >/tmp/deck-apt.log 2>&1 && apt-get -y -qq autoremove >>/tmp/deck-apt.log 2>&1 && echo "apt: $(grep -c "^Setting up" /tmp/deck-apt.log) packages updated"'
+echo "Updating snaps (Firefox etc.)..."
+agent 'snap refresh 2>&1 | tail -n 5; sync'
+vs shutdown $NAME >/dev/null
+for _ in $(seq 1 60); do [[ "$(vs domstate $NAME)" == "shut off" ]] && break; sleep 3; done
+mkdir -p "$HOME/.local/state/deck"; date +%s > "$HOME/.local/state/deck/last-update"
+echo "deck base updated $(date '+%d %b %Y')."

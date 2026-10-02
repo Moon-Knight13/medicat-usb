@@ -1,15 +1,16 @@
 #!/bin/bash
-# deck-create — make "deck", the disposable browser VM, in VirtualBox (once per machine).
+# deck-create — make "deck", the disposable media and browsing VM, in KVM (once per machine).
 #
-#   deck-create              create the VM, install a minimal Ubuntu + Firefox unattended
-#                            from the golden ISO, then snapshot it as "Ready" (about 15 minutes)
-#   deck-create --rebuild    delete the existing deck (all snapshots) and make it again
-#   deck-reset               throw away everything since the last snapshot and start it
+#   deck-create              build it: minimal Ubuntu, private Firefox (DuckDuckGo, uBlock Origin),
+#                            dark mode, installed unattended from the golden ISO (about 15 minutes)
+#   deck-create --rebuild    delete the existing deck and build it again
+#   deck                     start it full screen; everything done inside is thrown away when it stops
 #
-# Run as your own user (the VM lives in ~/VirtualBox VMs). Sizes come from
+# Run as your own user, inside your desktop session: deck is a per-user libvirt VM
+# (qemu:///session) so its sound goes straight to your PipeWire. Sizes come from
 # /etc/golden/deck.conf, written by the golden playbook from vars/apps.yml.
 set -euo pipefail
-NAME=deck
+NAME=deck; C=qemu:///session
 CPUS=auto; MEMORY_MB=auto; DISK_MB=25600; ISO=/opt/golden/ubuntu.iso; ISO_URL=""
 MIN_CPUS=2; MAX_CPUS=10; MIN_MEMORY_MB=4096; MAX_MEMORY_MB=11010
 # shellcheck disable=SC1091
@@ -18,18 +19,24 @@ clamp() { local v=$1 lo=$2 hi=$3; (( v < lo )) && v=$lo; (( v > hi )) && v=$hi; 
 [[ "$CPUS" == auto ]] && CPUS=$(clamp $(( $(nproc) / 2 )) "$MIN_CPUS" "$MAX_CPUS")                       # half the host's threads
 [[ "$MEMORY_MB" == auto ]] && MEMORY_MB=$(clamp $(( $(awk '/MemTotal/{print $2}' /proc/meminfo) / 4096 )) "$MIN_MEMORY_MB" "$MAX_MEMORY_MB")   # a quarter of its RAM
 die() { echo "deck-create: $*" >&2; exit 1; }
+vs() { virsh -c "$C" "$@"; }
+agent() { /usr/local/lib/golden/deck-agent "$@"; }
+TEMPLATE=${TEMPLATE:-/opt/golden/ubuntu/files/deck/user-data}
+WORK="$HOME/.local/share/deck"; DISK="$HOME/.local/share/libvirt/images/$NAME.qcow2"
 
 [[ $EUID -ne 0 ]] || die "run as your own user, not root"
-command -v VBoxManage >/dev/null || die "VirtualBox is not installed"
-grep -q '^vboxdrv ' /proc/modules || die "the VirtualBox kernel module is not loaded (Secure Boot: enrol the key first, see golden-status)"
-id -nG | grep -qw vboxusers || die "you are not in the vboxusers group yet: log out and back in"
-if VBoxManage showvminfo "$NAME" >/dev/null 2>&1; then
+command -v virt-install >/dev/null || die "virt-install is missing (sudo apt install virt-manager)"
+[[ -w /dev/kvm ]] || die "no access to /dev/kvm: log out and back in so the kvm group applies"
+[[ -n "${XDG_RUNTIME_DIR:-}" && -S "$XDG_RUNTIME_DIR/pipewire-0" ]] || die "run this from your desktop session (it needs your PipeWire for sound)"
+[[ -f "$TEMPLATE" ]] || die "missing $TEMPLATE"
+if vs dominfo "$NAME" >/dev/null 2>&1; then
     if [[ "${1:-}" == --rebuild ]]; then
-        echo "Deleting the existing $NAME and its snapshots"
-        VBoxManage controlvm "$NAME" poweroff >/dev/null 2>&1 || true; sleep 2
-        VBoxManage unregistervm "$NAME" --delete >/dev/null
+        echo "Deleting the existing $NAME"
+        vs destroy "$NAME" >/dev/null 2>&1 || true
+        vs undefine "$NAME" --remove-all-storage >/dev/null 2>&1 || vs undefine "$NAME" >/dev/null
+        rm -f "$DISK"
     else
-        echo "$NAME already exists; use deck-reset to start it fresh, or deck-create --rebuild to make it again"; exit 0
+        echo "$NAME already exists; start it with: deck   (deck-create --rebuild makes it again)"; exit 0
     fi
 fi
 if [[ ! -f "$ISO" ]]; then
@@ -38,34 +45,71 @@ if [[ ! -f "$ISO" ]]; then
     [[ -f "$ISO" ]] || { echo "Fetching $ISO_URL (about 6 GB)"; curl -fL --progress-bar -o "$ISO" "$ISO_URL"; }
 fi
 
-echo "Creating $NAME: $CPUS CPUs, $MEMORY_MB MB, $DISK_MB MB disk, from $(basename "$ISO")"
-VBoxManage createvm --name "$NAME" --ostype Ubuntu_64 --register >/dev/null
-VBoxManage modifyvm "$NAME" --cpus "$CPUS" --memory "$MEMORY_MB" --vram 128 --graphicscontroller vmsvga \
-    --nic1 nat --boot1 disk --boot2 dvd --boot3 none --boot4 none --audio-driver none --clipboard-mode disabled
-vmdir=$(VBoxManage showvminfo "$NAME" --machinereadable | sed -n 's/^CfgFile="\(.*\)\/[^/]*"$/\1/p')
-VBoxManage createmedium disk --filename "$vmdir/$NAME.vdi" --size "$DISK_MB" --format VDI >/dev/null
-VBoxManage storagectl "$NAME" --name SATA --add sata --controller IntelAhci --portcount 1 --bootable on
-VBoxManage storageattach "$NAME" --storagectl SATA --port 0 --device 0 --type hdd --medium "$vmdir/$NAME.vdi"
-VBoxManage storagectl "$NAME" --name IDE --add ide --controller PIIX4
-VBoxManage setextradata "$NAME" GUI/Fullscreen true          # opens full screen; Host+F toggles
-VBoxManage setextradata "$NAME" GUI/ShowMiniToolBar true
+# Unattended install: the ISO's own kernel boots with "autoinstall" and reads our answers
+# (user-data: throwaway account deck/deck, minimal desktop, private Firefox, dark mode)
+# from a small CIDATA disc, then powers off.
+mkdir -p "$WORK" "$(dirname "$DISK")"
+cp "$TEMPLATE" "$WORK/user-data"
+printf 'instance-id: deck\nlocal-hostname: deck\n' > "$WORK/meta-data"
+xorriso -as mkisofs -quiet -V CIDATA -J -r -o "$WORK/seed.iso" "$WORK/user-data" "$WORK/meta-data" 2>/dev/null
 
-# Unattended install: VirtualBox boots the ISO with our own autoinstall (files/deck/user-data:
-# throwaway account deck/deck, minimal desktop which includes Firefox, power off when done).
-# Its own generated recipe does not work with Ubuntu 26.04, and guest additions are not needed.
-template=${TEMPLATE:-/opt/golden/ubuntu/files/deck/user-data}
-[[ -f "$template" ]] || die "missing $template"
-VBoxManage unattended install "$NAME" --iso "$ISO" --user deck --password deck \
-    --script-template="$template" --no-install-additions --start-vm=headless >/dev/null
-echo "Installing the guest (headless). This takes about 15 minutes; waiting..."
+echo "Creating $NAME: $CPUS CPUs, $MEMORY_MB MB, $(( DISK_MB / 1024 )) GB disk, from $(basename "$ISO")"
+virt-install --connect "$C" --name "$NAME" --memory "$MEMORY_MB" --vcpus "$CPUS" --cpu host-passthrough \
+    --osinfo detect=on,require=off,name=ubuntu24.04 \
+    --disk "path=$DISK,size=$(( DISK_MB / 1024 )),format=qcow2,bus=virtio" \
+    --disk "path=$WORK/seed.iso,device=cdrom" \
+    --location "$ISO,kernel=casper/vmlinuz,initrd=casper/initrd" --extra-args "autoinstall --- quiet" \
+    --network user,model=virtio --graphics spice --video virtio --sound ich9 \
+    --noautoconsole --wait 0 >/dev/null 2> >(grep -v "^WARNING\|^Please file a bug" >&2)
+echo "Installing the guest (hidden). This takes about 15 minutes; waiting..."
 for (( i = 0; i < 240; i++ )); do
     sleep 15
-    state=$(VBoxManage showvminfo "$NAME" --machinereadable | sed -n 's/^VMState="\(.*\)"$/\1/p')
-    [[ "$state" == poweroff ]] && break
+    [[ "$(vs domstate "$NAME")" == "shut off" ]] && break
 done
-[[ "${state:-}" == poweroff ]] || die "the guest install did not finish within an hour; look at it with: VBoxManage startvm $NAME"
-VBoxManage storageattach "$NAME" --storagectl IDE --port 0 --device 0 --medium none 2>/dev/null || true   # drop the ISO
-VBoxManage storageattach "$NAME" --storagectl IDE --port 1 --device 0 --medium none 2>/dev/null || true
-VBoxManage snapshot "$NAME" take Ready --description "Fresh minimal Ubuntu with Firefox, made by deck-create" >/dev/null
-echo "$NAME is ready. Start it with deck-reset (always from the Ready snapshot; user deck, password deck)."
-echo "To update it: start it, update, then: VBoxManage snapshot $NAME take \"updated $(date +%b%y)\""
+[[ "$(vs domstate "$NAME")" == "shut off" ]] || die "the guest install did not finish within an hour; look at it with: virt-viewer -c $C $NAME"
+
+# Final hardware: no install discs; 3D video on the host GPU when there is one; sound
+# straight into the user's PipeWire, playback only (the VM gets no microphone).
+xml=$(mktemp); trap 'rm -f "$xml"' EXIT
+vs dumpxml --inactive "$NAME" > "$xml"
+python3 - "$xml" "$XDG_RUNTIME_DIR" <<'PY'
+import os, re, sys
+path, runtime = sys.argv[1], sys.argv[2]
+s = open(path).read()
+s = re.sub(r"\s*<disk type='file' device='cdrom'>.*?</disk>", "", s, flags=re.S)
+render = "/dev/dri/renderD128"
+gl = f"\n      <gl enable='yes' rendernode='{render}'/>" if os.access(render, os.R_OK | os.W_OK) else ""
+s = re.sub(r"<graphics type='spice'[^>]*>.*?</graphics>",
+           f"<graphics type='spice'>\n      <listen type='none'/>\n      <image compression='off'/>{gl}\n    </graphics>", s, flags=re.S)
+if gl:
+    s = re.sub(r"<model type='virtio' heads='1' primary='yes'/>",
+               "<model type='virtio' heads='1' primary='yes'>\n        <acceleration accel3d='yes'/>\n      </model>", s)
+s = re.sub(r"<audio id='1' type='[a-z]+'/>", f"<audio id='1' type='pipewire' runtimeDir='{runtime}'/>", s)
+s = s.replace("<sound model='ich9'>", "<sound model='ich9'>\n      <codec type='output'/>", 1)
+open(path, "w").write(s)
+PY
+vs define "$xml" >/dev/null
+
+# One normal boot before the disk turns transient: let Firefox fetch uBlock Origin (two runs:
+# the first stages it, the second installs it), refresh snaps, and set the guest volume.
+echo "Finishing inside the guest (Firefox add-on, snaps)..."
+vs start "$NAME" >/dev/null
+for _ in $(seq 1 60); do agent true 10 >/dev/null 2>&1 && break; sleep 3; done
+for _ in $(seq 1 40); do agent 'loginctl list-sessions --no-legend | grep -q seat0' 10 >/dev/null 2>&1 && break; sleep 3; done
+sleep 5
+agent 'S="runuser -u deck -- env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus WAYLAND_DISPLAY=wayland-0 HOME=/home/deck"
+snap refresh >/dev/null 2>&1
+for n in 1 2; do $S timeout 45 snap run firefox --headless about:blank >/dev/null 2>&1; sleep 3; done
+p=$(ls -d /home/deck/snap/firefox/common/.mozilla/firefox/*.default* | head -1)
+rm -f "$p"/sessionstore.jsonlz4 "$p"/sessionstore-backups/recovery.*
+$S wpctl set-volume @DEFAULT_AUDIO_SINK@ 1.0; sleep 2; sync
+ls "$p/extensions" | grep -q uBlock0 && echo "uBlock Origin: installed" || echo "uBlock Origin: not yet (it installs on first use)"' 600 || true
+vs shutdown "$NAME" >/dev/null
+for _ in $(seq 1 60); do [[ "$(vs domstate "$NAME")" == "shut off" ]] && break; sleep 3; done
+vs destroy "$NAME" >/dev/null 2>&1 || true
+
+# From now on every session is thrown away when the VM stops.
+vs dumpxml --inactive "$NAME" | sed "0,/<target dev='vda' bus='virtio'\/>/s//<target dev='vda' bus='virtio'\/>\n      <transient\/>/" > "$xml"
+vs define "$xml" >/dev/null
+mkdir -p "$HOME/.local/state/deck"; date +%s > "$HOME/.local/state/deck/last-update"
+echo "$NAME is ready. Start it with: deck   (user deck, password deck; updates: deck-update, also weekly by itself)"

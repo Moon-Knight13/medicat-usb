@@ -1,0 +1,55 @@
+#!/bin/bash
+# golden-help — list the commands a golden laptop has and what they do.
+WORK=$(sed -n 's/^INNER=//p' /etc/golden/vpn-chain.conf 2>/dev/null); WORK=${WORK:-your work VPN}
+DECKVPN=$(sed -n 's/^VPN_COUNTRY=//p' /etc/golden/deck.conf 2>/dev/null)
+chains=""
+for f in /usr/local/bin/vpn-chain-*; do
+    [[ -x "$f" ]] || continue
+    name=$(sed -n 's/^# Proton VPN \(.*\) → .*/\1/p' "$f")
+    chains+=$(printf '\n    %-26s Proton %s, then %s through it' "$(basename "$f")" "${name:-?}" "$WORK")
+done
+cat <<TXT
+Golden laptop commands   (golden-help shows this list)
+
+  This laptop
+    golden-status              What the install or last update did, and what is left to do by hand
+    golden-status --watch      Follow an install or update while it runs
+    golden-update              Update this laptop from the recipe on GitHub (asks for your password)
+    golden-update <branch>     Same, from a branch: to try a change before merging it
+    golden-update --preferences   Also re-apply desktop, VS Code and git/ssh settings
+    golden-projects            Clone the repositories listed in your golden settings
+
+  Automatic updates
+    Daily                      Security updates (silent, never restarts the laptop)
+    Weekly                     Monday, or the first time after it that the laptop is on the charger
+                               and idle for 10 minutes: everything else, plus deck. A notification
+                               shows when it starts and ends, and if a restart is needed.
+                               Run it now: sudo systemctl start golden-weekly-update
+
+  deck: disposable VM for media and browsing
+    deck                       Start it full screen. Close its window to stop it: everything done
+                               inside is thrown away. ${DECKVPN:+Connects Proton VPN ($DECKVPN) with the kill
+                               switch first and disconnects it after; will not start without it.}
+    deck --no-vpn              Start it without the VPN
+    deck-update                Install updates into its clean copy (deck closed; about 2 minutes)
+    deck-create [--rebuild]    Build it (done at first login, ~15 min); --rebuild makes it again
+    In its window              Ctrl+Alt frees mouse and keyboard; Shift+F11 leaves full screen.
+                               Login if asked: deck / deck
+
+  VPN   (also as launchers: press Super, type "VPN")
+    vpn-chain [COUNTRY]        Proton to COUNTRY (kill switch on), then $WORK through it${chains}
+    vpn-chain off              Disconnect $WORK, then Proton; kill switch back as it was
+    vpn-chain status           What is connected, and whether $WORK really goes through Proton
+    protonvpn connect --country CH | disconnect | status     Proton on its own
+
+  Power
+    Lid closed on the charger  Keeps running. On battery it goes to sleep
+    deck window open           The screen does not dim or lock, the laptop does not sleep
+
+  Other useful commands
+    mictest                    Live microphone level: talk and watch the bar (Ctrl+C to stop)
+    fwupdmgr get-updates       Firmware and BIOS updates waiting (install: sudo fwupdmgr update)
+    powerprofilesctl set performance|balanced|power-saver      Power mode
+    ssh-copy-id <host>         Put this laptop's SSH key on a server from ~/.ssh/config
+    virt-manager               Other virtual machines
+TXT

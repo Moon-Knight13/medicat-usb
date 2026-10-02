@@ -1,6 +1,6 @@
 #cloud-config
-# deck: minimal Ubuntu desktop (which includes Firefox) with a throwaway account, installed
-# unattended by deck-create. VirtualBox puts this on its boot medium as the autoinstall.
+# deck: disposable media and browsing VM (KVM). Minimal Ubuntu desktop, private Firefox,
+# dark mode, no wizard, straight to the desktop. Built by deck-create; its disk is transient.
 autoinstall:
   version: 1
   locale: en_GB.UTF-8
@@ -20,11 +20,19 @@ autoinstall:
       name: direct
     swap:
       size: 0
-  updates: security
+  updates: all
   packages:
-    - virtualbox-guest-utils      # screen auto-resize and full screen (Ubuntu's packaged guest additions)
+    - spice-vdagent        # resize, full screen with virt-viewer
+    - qemu-guest-agent
   late-commands:
-    # A disposable browser: no first-login wizard, no login screen, straight to the desktop.
-    - curtin in-target -- sh -c 'mkdir -p /home/deck/.config && echo yes > /home/deck/.config/gnome-initial-setup-done && chown -R deck:deck /home/deck/.config'
+    # No first-login wizard (also the per-release "upgrade" one), no login screen.
+    - curtin in-target -- sh -c '. /etc/os-release; mkdir -p /home/deck/.config/gnome-initial-setup && echo yes > /home/deck/.config/gnome-initial-setup-done && touch /home/deck/.config/gnome-initial-setup/upgrade-$VERSION_ID-done && chown -R deck:deck /home/deck/.config'
     - curtin in-target -- sh -c 'printf "[daemon]\nAutomaticLoginEnable=true\nAutomaticLogin=deck\n" > /etc/gdm3/custom.conf'
+    # Private Firefox: DuckDuckGo, uBlock Origin, tracking protection, no onboarding.
+    - mkdir -p /target/etc/firefox/policies
+    - sh -c 'echo ewogICJwb2xpY2llcyI6IHsKICAgICJTZWFyY2hFbmdpbmVzIjogewogICAgICAiRGVmYXVsdCI6ICJEdWNrRHVja0dvIgogICAgfSwKICAgICJIb21lcGFnZSI6IHsKICAgICAgIlVSTCI6ICJodHRwczovL2R1Y2tkdWNrZ28uY29tLyIsCiAgICAgICJTdGFydFBhZ2UiOiAiaG9tZXBhZ2UiCiAgICB9LAogICAgIkVuYWJsZVRyYWNraW5nUHJvdGVjdGlvbiI6IHsKICAgICAgIlZhbHVlIjogdHJ1ZSwKICAgICAgIkNyeXB0b21pbmluZyI6IHRydWUsCiAgICAgICJGaW5nZXJwcmludGluZyI6IHRydWUsCiAgICAgICJFbWFpbFRyYWNraW5nIjogdHJ1ZQogICAgfSwKICAgICJIdHRwc09ubHlNb2RlIjogImVuYWJsZWQiLAogICAgIkRpc2FibGVUZWxlbWV0cnkiOiB0cnVlLAogICAgIkRpc2FibGVGaXJlZm94U3R1ZGllcyI6IHRydWUsCiAgICAiRGlzYWJsZVBvY2tldCI6IHRydWUsCiAgICAiRmlyZWZveEhvbWUiOiB7CiAgICAgICJTcG9uc29yZWRUb3BTaXRlcyI6IGZhbHNlLAogICAgICAiU3BvbnNvcmVkUG9ja2V0IjogZmFsc2UsCiAgICAgICJQb2NrZXQiOiBmYWxzZQogICAgfSwKICAgICJGaXJlZm94U3VnZ2VzdCI6IHsKICAgICAgIlNwb25zb3JlZFN1Z2dlc3Rpb25zIjogZmFsc2UsCiAgICAgICJJbXByb3ZlU3VnZ2VzdCI6IGZhbHNlCiAgICB9LAogICAgIlBhc3N3b3JkTWFuYWdlckVuYWJsZWQiOiBmYWxzZSwKICAgICJPZmZlclRvU2F2ZUxvZ2lucyI6IGZhbHNlLAogICAgIkRvbnRDaGVja0RlZmF1bHRCcm93c2VyIjogdHJ1ZSwKICAgICJOb0RlZmF1bHRCb29rbWFya3MiOiB0cnVlLAogICAgIk92ZXJyaWRlRmlyc3RSdW5QYWdlIjogIiIsCiAgICAiT3ZlcnJpZGVQb3N0VXBkYXRlUGFnZSI6ICIiLAogICAgIlVzZXJNZXNzYWdpbmciOiB7CiAgICAgICJTa2lwT25ib2FyZGluZyI6IHRydWUsCiAgICAgICJFeHRlbnNpb25SZWNvbW1lbmRhdGlvbnMiOiBmYWxzZSwKICAgICAgIkZlYXR1cmVSZWNvbW1lbmRhdGlvbnMiOiBmYWxzZSwKICAgICAgIk1vcmVGcm9tTW96aWxsYSI6IGZhbHNlLAogICAgICAiVXJsYmFySW50ZXJ2ZW50aW9ucyI6IGZhbHNlLAogICAgICAiRmlyZWZveExhYnMiOiBmYWxzZSwKICAgICAgIkxvY2tlZCI6IGZhbHNlCiAgICB9LAogICAgIlByZWZlcmVuY2VzIjogewogICAgICAibGF5b3V0LmNzcy5wcmVmZXJzLWNvbG9yLXNjaGVtZS5jb250ZW50LW92ZXJyaWRlIjogewogICAgICAgICJWYWx1ZSI6IDAsCiAgICAgICAgIlN0YXR1cyI6ICJkZWZhdWx0IgogICAgICB9LAogICAgICAiYnJvd3Nlci5zZXNzaW9uc3RvcmUucmVzdW1lX2Zyb21fY3Jhc2giOiB7CiAgICAgICAgIlZhbHVlIjogZmFsc2UsCiAgICAgICAgIlN0YXR1cyI6ICJkZWZhdWx0IgogICAgICB9LAogICAgICAiYnJvd3Nlci5hYm91dHdlbGNvbWUuZW5hYmxlZCI6IHsKICAgICAgICAiVmFsdWUiOiBmYWxzZSwKICAgICAgICAiU3RhdHVzIjogImRlZmF1bHQiCiAgICAgIH0KICAgIH0sCiAgICAiRXh0ZW5zaW9ucyI6IHsKICAgICAgIkluc3RhbGwiOiBbCiAgICAgICAgImh0dHBzOi8vYWRkb25zLm1vemlsbGEub3JnL2ZpcmVmb3gvZG93bmxvYWRzL2xhdGVzdC91YmxvY2stb3JpZ2luL2xhdGVzdC54cGkiCiAgICAgIF0KICAgIH0KICB9Cn0K | base64 -d > /target/etc/firefox/policies/policies.json && chmod 755 /target/etc/firefox /target/etc/firefox/policies && chmod 644 /target/etc/firefox/policies/policies.json'
+    # Dark mode.
+    - mkdir -p /target/etc/dconf/profile /target/etc/dconf/db/local.d
+    - sh -c 'echo dXNlci1kYjp1c2VyCnN5c3RlbS1kYjpsb2NhbAo= | base64 -d > /target/etc/dconf/profile/user && echo W29yZy9nbm9tZS9kZXNrdG9wL2ludGVyZmFjZV0KY29sb3Itc2NoZW1lPSdwcmVmZXItZGFyaycKZ3RrLXRoZW1lPSdZYXJ1LWRhcmsnCg== | base64 -d > /target/etc/dconf/db/local.d/00-deck'
+    - curtin in-target -- dconf update
   shutdown: poweroff

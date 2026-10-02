@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=deck viewer (virt-viewer)
+Comment=Window of the deck VM. Lets GNOME remember the keyboard-shortcuts answer for it.
+Exec=virt-viewer
+Icon=computer
+NoDisplay=true
+StartupWMClass=org.virt-manager.virt-viewer

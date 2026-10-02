@@ -15,7 +15,7 @@ export ANSIBLE_FORCE_COLOR=0 DEBIAN_FRONTEND=noninteractive
 
 {
 echo "=== golden-firstboot $(date -Is) ==="
-[[ "$BRANCH" == main ]] || echo "=== following branch $BRANCH (no branch protection); golden-update.sh main to switch back"
+[[ "$BRANCH" == main ]] || echo "=== following branch $BRANCH (no branch protection); golden-update main to switch back"
 # The installer adds nothing beyond the ISO, so fetch what the playbook run needs.
 need=(); for p in git ansible curl python3-apt; do dpkg -s "$p" >/dev/null 2>&1 || need+=("$p"); done
 if (( ${#need[@]} )); then

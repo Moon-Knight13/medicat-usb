@@ -1,0 +1,12 @@
+[Unit]
+Description=Build deck, the disposable media VM, at the first login that can (once)
+After=graphical-session.target pipewire.service
+ConditionPathExists=!%h/.local/share/libvirt/images/deck.qcow2
+
+[Service]
+Type=oneshot
+ExecStartPre=/bin/sleep 60
+ExecStart=/usr/local/lib/golden/deck-firstrun
+
+[Install]
+WantedBy=graphical-session.target
