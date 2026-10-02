@@ -29,10 +29,23 @@ if running; then
     while running; do sleep 10; done
 fi
 
-command -v git >/dev/null || { apt-get -q update && apt-get -qy install git; }
-tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
-git clone -q --depth 1 --branch "$BRANCH" "$REPO" "$tmp/repo"
+if [[ -n "${GOLDEN_UPDATE_SRC:-}" ]]; then
+    tmp=$GOLDEN_UPDATE_SRC          # already cloned by an older copy of this script (see below)
+else
+    command -v git >/dev/null || { apt-get -q update && apt-get -qy install git; }
+    tmp=$(mktemp -d)
+fi
+trap 'rm -rf "$tmp"' EXIT
+[[ -d "$tmp/repo" ]] || git clone -q --depth 1 --branch "$BRANCH" "$REPO" "$tmp/repo"
 [[ -f "$tmp/repo/golden/ubuntu/playbook.yml" ]] || { echo "ERROR: branch $BRANCH has no golden/ubuntu/playbook.yml" >&2; exit 1; }
+
+# Carry on with the fetched copy of this script, not this one: this laptop's copy may be older
+# and install files the new recipe no longer has, which stopped an update halfway.
+new="$tmp/repo/golden/ubuntu/firstboot/golden-update.sh"
+if [[ -z "${GOLDEN_UPDATE_SRC:-}" ]] && ! cmp -s "$new" "${BASH_SOURCE[0]:-}"; then
+    trap - EXIT
+    GOLDEN_UPDATE_SRC=$tmp exec bash "$new" "$@"
+fi
 
 local_vars=/opt/golden/ubuntu/vars/local.yml
 [[ -f "$local_vars" ]] && cp -p "$local_vars" "$tmp/local.yml"
