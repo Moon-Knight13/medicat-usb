@@ -667,6 +667,7 @@
               ISO=/opt/golden/ubuntu.iso
               ISO_URL={{ deck_iso_url }}
               VPN_COUNTRY={{ deck_vpn_country | default('') }}
+              TIMEZONE={{ deck_timezone if deck_timezone != 'auto' else (deck_timezones[deck_vpn_country | default('') | upper] | default('UTC')) }}
 
         - name: Kept ISO readable by deck-create (runs as the user)
           ansible.builtin.file:

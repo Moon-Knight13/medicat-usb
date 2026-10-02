@@ -103,6 +103,8 @@ stops, with no snapshot to restore.
 
 - `deck`: start it full screen. Close the window (or Power Off inside) to stop and wipe it.
   Ctrl+Alt releases the mouse and keyboard; Shift+F11 leaves full screen.
+- Time zone matches deck's VPN country (`deck_timezone: auto`; Europe/Zurich for CH), so a
+  London clock behind a Swiss IP doesn't give the VPN away. `deck-update` applies changes.
 - Proton VPN: `deck` connects to the fastest server in `deck_vpn_country` (CH by default)
   before starting, unless a VPN is already up, and disconnects afterwards if it connected it.
   While deck's VPN is up the kill switch is on (internet blocked if the VPN drops); the previous

@@ -1,7 +1,7 @@
 #!/bin/bash
 # deck-update — install updates into deck's clean base, so later sessions start current.
-# Turns the transient disk off, boots the VM hidden, runs apt and snap updates through the
-# guest agent, shuts it down and turns transient back on. About 2 minutes; deck must be closed.
+# Turns the transient disk off, boots the VM hidden, sets its time zone (TIMEZONE in
+# /etc/golden/deck.conf), runs apt and snap updates through the guest agent, shuts it down and turns transient back on. About 2 minutes; deck must be closed.
 # The weekly background update (golden-weekly-update) runs this too, when the laptop is idle.
 set -euo pipefail
 C=qemu:///session; NAME=deck
@@ -20,6 +20,11 @@ transient off
 vs start $NAME >/dev/null
 echo "Waiting for deck to boot..."
 for _ in $(seq 1 60); do agent true 10 >/dev/null 2>&1 && break; sleep 3; done
+TIMEZONE=$(sed -n 's/^TIMEZONE=//p' /etc/golden/deck.conf 2>/dev/null)
+if [[ -n "$TIMEZONE" ]]; then
+    echo "Time zone: $TIMEZONE (matches deck's VPN country)"
+    agent "timedatectl set-timezone '$TIMEZONE'"
+fi
 echo "Updating packages (apt)..."
 agent 'export DEBIAN_FRONTEND=noninteractive; apt-get -qq update && apt-get -y -qq full-upgrade >/tmp/deck-apt.log 2>&1 && apt-get -y -qq autoremove >>/tmp/deck-apt.log 2>&1 && echo "apt: $(grep -c "^Setting up" /tmp/deck-apt.log) packages updated"'
 echo "Updating snaps (Firefox etc.)..."
