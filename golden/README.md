@@ -50,7 +50,7 @@ which is part of the kernel; VirtualBox was dropped), so there is no signing key
 Laptops installed earlier keep their enrolled VirtualBox key in the firmware unused;
 `sudo mokutil --delete /var/lib/shim-signed/mok/MOK.der` removes it (confirm at the next boot).
 
-### Continuing work on the new machine: SSH, projects, sign-ins
+### Continuing work on the new machine: SSH, sign-ins
 
 - **New SSH keys are made on every machine**: `~/.ssh/id_ed25519`, plus every other key the
   carried `ssh_config` names in an `IdentityFile` (e.g. a separate key for a work GitHub
@@ -62,8 +62,7 @@ Laptops installed earlier keep their enrolled VirtualBox key in the firmware unu
   finish note lists every public key with the hosts that need it. It holds host names,
   addresses and usernames, so it is on the stick, not in the public repo. Same folder for
   anything else personal but not secret.
-- **Projects**: list repositories under `projects:` in `vars/local.yml`. Public ones clone
-  into `~/Documents` at first boot; after signing in, `golden-projects` clones the rest.
+- **Repositories** are not cloned by the recipe: clone what you need, when you need it.
 - **VPNs**: list them under `vpns:` in `vars/local.yml` (name, gateway, protocol, authgroup,
   username). They appear in the panel menu; switch one on and enter your password. Nothing
   secret is stored.

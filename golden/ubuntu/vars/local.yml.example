@@ -5,9 +5,6 @@
 git_name: Your Name
 # GitHub's privacy address is <id>+<login> at users.noreply.github.com (see GitHub > Settings > Emails).
 git_email: your-email
-# Repositories to clone into ~/Documents. Plain URLs clone into a folder named after the
-# repo; "sub/dir: URL" clones into ~/Documents/sub/dir. Public https URLs clone at first
-# boot; ssh and private ones when you run `golden-projects` after setting up access.
 # VPNs (OpenConnect/AnyConnect) shown in the panel menu; switch on, authenticate. No passwords stored.
 vpns:
   - name: Work            # connection name and tun interface name
@@ -15,6 +12,3 @@ vpns:
     protocol: anyconnect
     authgroup: GROUP
     username: your-user
-projects:
-  - https://github.com/you/public-repo.git
-  - work/tool: ssh://github.com/org/private-repo.git   # ssh form; git@host:path also works
