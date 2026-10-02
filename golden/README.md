@@ -52,12 +52,14 @@ Laptops installed earlier keep their enrolled VirtualBox key in the firmware unu
 
 ### Continuing work on the new machine: SSH, projects, sign-ins
 
-- **A new SSH key is made on every machine** (`~/.ssh/id_ed25519`); private keys are never
-  carried on the stick. The finish note shows the public key and the commands to add it to
+- **New SSH keys are made on every machine**: `~/.ssh/id_ed25519`, plus every other key the
+  carried `ssh_config` names in an `IdentityFile` (e.g. a separate key for a work GitHub
+  account or a GitLab). Private keys are never carried on the stick. The finish note shows the public key and the commands to add it to
   GitHub (`gh auth login`, `gh ssh-key add`) and to servers (`ssh-copy-id`). A lost laptop
   then means revoking one key, not all of them.
 - **Your `~/.ssh/config` can ride on the stick**: copy it to `golden/ubuntu/local/ssh_config`
-  (git-ignored), with `IdentityFile ~/.ssh/id_ed25519` for the hosts. It holds host names,
+  (git-ignored). Each `IdentityFile` it names is created fresh on the new machine, and the
+  finish note lists every public key with the hosts that need it. It holds host names,
   addresses and usernames, so it is on the stick, not in the public repo. Same folder for
   anything else personal but not secret.
 - **Projects**: list repositories under `projects:` in `vars/local.yml`. Public ones clone
