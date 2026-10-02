@@ -837,7 +837,7 @@
         src: "{{ item }}"
         dest: "/usr/local/bin/{{ item }}"
         mode: "0755"
-      loop: [golden-help, golden-update]
+      loop: [golden-help, golden-update, mictest]
 
     # Obsidian (Electron) dies with SIGTRAP when the session ends; harmless, so no crash dialog.
     - name: Apport ignore-list directory

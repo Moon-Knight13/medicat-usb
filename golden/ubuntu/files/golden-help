@@ -47,6 +47,7 @@ Golden laptop commands   (golden-help shows this list)
     deck window open           The screen does not dim or lock, the laptop does not sleep
 
   Other useful commands
+    mictest                    Live microphone level: talk and watch the bar (Ctrl+C to stop)
     fwupdmgr get-updates       Firmware and BIOS updates waiting (install: sudo fwupdmgr update)
     powerprofilesctl set performance|balanced|power-saver      Power mode
     ssh-copy-id <host>         Put this laptop's SSH key on a server from ~/.ssh/config

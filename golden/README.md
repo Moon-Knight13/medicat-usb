@@ -143,7 +143,7 @@ stops, with no snapshot to restore.
 `golden-update` to bring a laptop up to date. An update never wipes, reboots or removes
 anything, and it leaves your personal preferences alone: desktop settings, VS Code settings, git
 and ssh config and dotfiles are applied once at first boot, and changes you make afterwards
-stay. To re-apply them: `golden-update --preferences`. `golden-help` lists every command.
+stay. To re-apply them: `golden-update --preferences`. `golden-help` lists every command; `mictest` shows the microphone's live level.
 
 ### Hardware quirks
 
