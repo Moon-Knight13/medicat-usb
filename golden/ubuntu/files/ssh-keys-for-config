@@ -1,0 +1,56 @@
+#!/usr/bin/env python3
+"""ssh-keys-for-config — make this machine's own SSH keys for every IdentityFile in ~/.ssh/config.
+
+Keys are never carried between machines; only the config is. For each IdentityFile the config
+names that does not exist yet, this creates a new ed25519 key (no passphrase, comment
+user@host <name>). Then it prints every key the config uses, its public half and the hosts
+that need it, so they can be added where they belong (GitHub, GitLab, servers).
+Safe to repeat: existing keys are never touched.
+"""
+import getpass
+import os
+import socket
+import subprocess
+import sys
+
+home = os.path.expanduser("~")
+config = os.path.join(home, ".ssh", "config")
+if not os.path.isfile(config):
+    sys.exit(0)
+
+hosts_by_key = {}            # key path -> host patterns using it
+current = []
+for raw in open(config):
+    line = raw.split("#", 1)[0].strip()
+    if not line:
+        continue
+    parts = line.replace("=", " ", 1).split(None, 1)
+    if len(parts) < 2:
+        continue
+    word, value = parts[0].lower(), parts[1].strip().strip('"')
+    if word in ("host", "match"):
+        current = value.split() if word == "host" else []
+    elif word == "identityfile":
+        path = os.path.expanduser(value.replace("%d", home).replace("%u", getpass.getuser()))
+        if "%" in path:      # other tokens (%h, %r ...) depend on the connection; skip
+            continue
+        hosts_by_key.setdefault(path, []).extend(current)
+
+made = []
+for path in hosts_by_key:
+    if not os.path.exists(path):
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+        comment = f"{getpass.getuser()}@{socket.gethostname()} {os.path.basename(path)}"
+        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", comment, "-f", path], check=True)
+        made.append(path)
+
+for path, hosts in hosts_by_key.items():
+    pub = path + ".pub"
+    if not os.path.exists(pub):
+        continue
+    short = path.replace(home, "~", 1)
+    state = "new" if path in made else "existing"
+    print(f"{short} ({state}) for: {', '.join(dict.fromkeys(hosts)) or 'all hosts'}")
+    print(f"  {open(pub).read().strip()}")
+if made:
+    print("changed")

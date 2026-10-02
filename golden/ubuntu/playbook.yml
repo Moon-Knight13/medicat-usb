@@ -284,23 +284,36 @@
         mode: "0600"
       when: apply_prefs and (lookup('ansible.builtin.fileglob', 'local/ssh_config') | length > 0)
 
+    # The config travels on the stick; keys never do. Every IdentityFile it names (a separate
+    # key for a work GitHub account, a GitLab, ...) is made fresh on this machine.
+    - name: This machine's own key for every IdentityFile in the SSH config
+      ansible.builtin.script: files/ssh-keys-for-config
+      become_user: "{{ golden_user }}"
+      register: ssh_keys
+      changed_when: "'changed' in ssh_keys.stdout_lines"
+
     - name: This machine's public key
       ansible.builtin.slurp:
         src: "{{ golden_home }}/.ssh/id_ed25519.pub"
       register: ssh_pub
 
-    - name: Note where the new key still has to be added
+    - name: Note where the new keys still have to be added
       ansible.builtin.set_fact:
         golden_todo: "{{ golden_todo + [item] }}"
       loop:
         - |-
-          Sign in and authorise this machine's new SSH key (nothing is carried between machines):
-            {{ ssh_pub.content | b64decode | trim }}
-            gh auth login                                  (GitHub, also used by git over https)
-            gh ssh-key add ~/.ssh/id_ed25519.pub -t "$(hostname)"
-            ssh-copy-id <host>                             (each server in ~/.ssh/config)
+          Sign in and authorise this machine's SSH keys (made here; nothing is carried between machines):
+          {% for line in ssh_keys.stdout_lines | reject('equalto', 'changed') %}
+            {{ line }}
+          {% else %}
+            ~/.ssh/id_ed25519
+              {{ ssh_pub.content | b64decode | trim }}
+          {% endfor %}
+            GitHub:  gh auth login, then gh ssh-key add <key>.pub -t "$(hostname)"  (or paste it in Settings)
+            GitLab:  Preferences → SSH Keys → paste the .pub
+            Servers: ssh-copy-id <host>   (uses the key ~/.ssh/config names for that host)
       loop_control:
-        label: ssh key
+        label: ssh keys
 
     # VPNs from vars/local.yml: appear in the panel menu; you switch one on and authenticate.
     - name: VPN connections (OpenConnect / AnyConnect)
