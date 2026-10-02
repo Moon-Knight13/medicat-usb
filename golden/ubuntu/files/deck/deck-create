@@ -11,7 +11,7 @@
 # /etc/golden/deck.conf, written by the golden playbook from vars/apps.yml.
 set -euo pipefail
 NAME=deck; C=qemu:///session
-CPUS=auto; MEMORY_MB=auto; DISK_MB=25600; ISO=/opt/golden/ubuntu.iso; ISO_URL=""
+CPUS=auto; MEMORY_MB=auto; DISK_MB=25600; ISO=/opt/golden/ubuntu.iso; ISO_URL=""; TIMEZONE=UTC
 MIN_CPUS=2; MAX_CPUS=10; MIN_MEMORY_MB=4096; MAX_MEMORY_MB=11010
 # shellcheck disable=SC1091
 [[ -f /etc/golden/deck.conf ]] && . /etc/golden/deck.conf
@@ -49,7 +49,7 @@ fi
 # (user-data: throwaway account deck/deck, minimal desktop, private Firefox, dark mode)
 # from a small CIDATA disc, then powers off.
 mkdir -p "$WORK" "$(dirname "$DISK")"
-cp "$TEMPLATE" "$WORK/user-data"
+sed "s|^  timezone: .*|  timezone: $TIMEZONE|" "$TEMPLATE" > "$WORK/user-data"   # matches the VPN country
 printf 'instance-id: deck\nlocal-hostname: deck\n' > "$WORK/meta-data"
 xorriso -as mkisofs -quiet -V CIDATA -J -r -o "$WORK/seed.iso" "$WORK/user-data" "$WORK/meta-data" 2>/dev/null
 
