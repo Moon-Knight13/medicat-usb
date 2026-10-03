@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# pi — open a shell on a Raspberry Pi set up by pi-flash.
+#
+#   pi [HOST]          Wi-Fi (HOST.local) if it answers, else USB, else the Ethernet cable
+#   pi [HOST] local    Ethernet cable only, link-local: no DHCP server, no routing
+#   pi [HOST] share    Ethernet cable, and the Pi gets internet through this laptop
+#   pi off             free the Ethernet port again
+#
+# HOST defaults to DEFAULT_HOST in /etc/golden/pi.conf. Without one, pi skips Wi-Fi and finds
+# the Pi on USB or the cable by its MAC address.
+set -euo pipefail
+
+PI_CONF="${PI_CONF:-/etc/golden/pi.conf}"
+SYS_NET="${SYS_NET:-/sys/class/net}"
+PI_OUIS="b8:27:eb dc:a6:32 e4:5f:01 d8:3a:dd 28:cd:c1 2c:cf:67 88:a2:9e"   # Raspberry Pi vendor prefixes
+USB_ADDR=10.12.194.1                                                       # the Pi on USB (rpi-usb-gadget)
+
+die()      { echo "pi: $*" >&2; exit 1; }
+conf_get() { sed -n "s/^$1=//p" "$PI_CONF" 2>/dev/null | head -n1; }
+usage()    { sed -n '2,10s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 1; }
+
+# The Ethernet port the Pi is plugged into: CABLE_IFACE, or the only physical wired port.
+# A Pi's own USB link (cdc_ether, rndis_host, cdc_ncm) is not a cable port.
+cable_iface() {
+    local want dev type drv found=()
+    want=$(conf_get CABLE_IFACE)
+    if [[ -n "$want" ]]; then echo "$want"; return 0; fi
+    while IFS=: read -r dev type; do
+        [[ "$type" == ethernet && -e "$SYS_NET/$dev/device" ]] || continue
+        drv=$(basename "$(readlink "$SYS_NET/$dev/device/driver" 2>/dev/null || true)")
+        case "$drv" in cdc_ether|rndis_host|cdc_ncm) continue ;; esac
+        found+=("$dev")
+    done < <(nmcli -t -f DEVICE,TYPE device)
+    case ${#found[@]} in
+        1) echo "${found[0]}" ;;
+        0) die "no Ethernet port found; plug in the adapter or dock" ;;
+        *) die "several Ethernet ports (${found[*]}); set pi_cable_iface in vars/local.yml" ;;
+    esac
+}
+
+# Link-local IPv6 address of a Raspberry Pi on the port; empty if none answers.
+pi_on_cable() {
+    ping -6 -c2 -W1 "ff02::1%$1" >/dev/null 2>&1 || true
+    ip -6 neigh show dev "$1" | awk -v ouis="$PI_OUIS" '
+        BEGIN { n = split(ouis, o, " ") }
+        $1 ~ /^fe80/ { mac = tolower($3); for (i = 1; i <= n; i++) if (index(mac, o[i]) == 1) { print $1; exit } }'
+}
+
+# Bring PROFILE up on the cable port and wait up to 30 s for a Pi. Sets IFACE and ADDR.
+cable_up() {
+    IFACE=$(cable_iface)
+    nmcli -w 15 connection up "$1" ifname "$IFACE" >/dev/null || die "could not bring up $1 on $IFACE"
+    echo "Ethernet $IFACE up ($1), looking for the Pi..."
+    local i
+    for i in $(seq 1 30); do
+        ADDR=$(pi_on_cable "$IFACE")
+        if [[ -n "$ADDR" ]]; then return 0; fi
+        sleep 1
+    done
+    die "no Raspberry Pi seen on $IFACE after 30 seconds"
+}
+
+ssh_opts() { if [[ -n "$HOST" ]]; then printf '%s\n' -o "HostKeyAlias=$HOST.local"; fi; }
+
+ssh_pi() {
+    local opts; mapfile -t opts < <(ssh_opts)
+    exec ssh "${opts[@]}" "$USER@$1"
+}
+
+vpn_up() { nmcli -t -f TYPE connection show --active | grep -qE '^(vpn|wireguard|tun)$'; }
+
+main() {
+    HOST="" MODE=""
+    local a
+    for a in "$@"; do
+        case "$a" in
+            local|share|off) MODE=$a ;;
+            -*) usage ;;
+            *) [[ -z "$HOST" ]] || usage; HOST=$a ;;
+        esac
+    done
+    HOST=${HOST:-$(conf_get DEFAULT_HOST)}
+
+    case "$MODE" in
+        off)
+            nmcli connection down pi-shared >/dev/null 2>&1 || true
+            nmcli connection down pi-local >/dev/null 2>&1 || true
+            echo "Ethernet port released" ;;
+        local)
+            cable_up pi-local
+            ssh_pi "$ADDR%$IFACE" ;;
+        share)
+            cable_up pi-local        # a Pi must be on this cable before we serve DHCP on it
+            if vpn_up; then echo "Warning: a VPN is up; the Pi's internet traffic will go through it." >&2; fi
+            nmcli -w 15 connection up pi-shared ifname "$IFACE" >/dev/null || die "could not share on $IFACE"
+            echo "Sharing this laptop's connection with the Pi"
+            local opts i; mapfile -t opts < <(ssh_opts)
+            # Ask the Pi for a DHCP lease now rather than at its next retry; its link drops briefly.
+            ssh "${opts[@]}" "$USER@$ADDR%$IFACE" 'sudo -n nmcli -w 0 connection up eth-direct' >/dev/null 2>&1 || true
+            ADDR=""
+            for i in $(seq 1 20); do
+                sleep 1; ADDR=$(pi_on_cable "$IFACE")
+                if [[ -n "$ADDR" ]]; then break; fi
+            done
+            [[ -n "$ADDR" ]] || die "lost the Pi after turning on sharing"
+            ssh_pi "$ADDR%$IFACE" ;;
+        "")
+            if [[ -n "$HOST" ]] && ping -c1 -W1 "$HOST.local" >/dev/null 2>&1; then ssh_pi "$HOST.local"; fi
+            if ping -c1 -W1 "$USB_ADDR" >/dev/null 2>&1; then ssh_pi "$USB_ADDR"; fi
+            cable_up pi-local
+            ssh_pi "$ADDR%$IFACE" ;;
+    esac
+}
+
+if [[ -n "${PI_SOURCE_ONLY:-}" ]]; then return 0; fi
+main "$@"
