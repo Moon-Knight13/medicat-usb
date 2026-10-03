@@ -15,6 +15,7 @@
 #   ventoy/                     Ventoy release, extracted
 #   isos/<Folder>/<file>.iso    anything here is copied to the same path on the stick.
 #                               Ubuntu goes in isos/Live_Operating_Systems/Ubuntu/ automatically.
+#   isos/RaspberryPi/<image>.img.xz  pinned Raspberry Pi OS (golden/raspberrypi/image.conf), for pi-flash
 #   golden/<name>/autoinstall.yaml  unattended install recipe for isos/Live_Operating_Systems/<Name>/*.iso
 #   extra-isos.txt              optional, one "Folder/Sub|URL" per line, downloaded by update
 #   make-stick.conf             repeatable settings (LTS-only, flavour, partition style, stick test)
@@ -142,9 +143,31 @@ update_extra() {
     done < "$list"
 }
 
+# Pinned Raspberry Pi OS image (golden/raspberrypi/image.conf) for pi-flash, carried on the
+# stick under RaspberryPi/. Ventoy does not list .img.xz files, so the boot menu is unchanged.
+update_raspberrypi() {
+    local conf="$KIT/golden/raspberrypi/image.conf"
+    [[ -f "$conf" ]] || return 0
+    c_info "== Raspberry Pi OS image =="
+    local PI_IMAGE_URL PI_IMAGE_FILE PI_IMAGE_SHA256 old
+    # shellcheck disable=SC1090
+    source "$conf"
+    local dir="$ISOS/RaspberryPi" file="$ISOS/RaspberryPi/$PI_IMAGE_FILE"
+    mkdir -p "$dir"
+    if [[ -f "$file.ok" && "$(cat "$file.ok")" == "$PI_IMAGE_SHA256" && -f "$file" ]]; then
+        c_ok "$PI_IMAGE_FILE is current and verified"; return
+    fi
+    [[ -f "$file" ]] || { c_info "Downloading $PI_IMAGE_FILE..."; fetch "$PI_IMAGE_URL" "$file"; }
+    verify_sha256 "$file" "$PI_IMAGE_SHA256"
+    for old in "$dir"/*.img.xz; do
+        [[ "$old" != "$file" && -f "$old" ]] && { c_warn "Removing older $(basename "$old")"; rm -f "$old" "$old.ok"; }
+    done
+    c_ok "$PI_IMAGE_FILE ready"
+}
+
 cmd_update() {
     need curl curl; need sha256sum coreutils; need tar tar
-    update_ventoy; update_medicat; update_ubuntu; update_extra
+    update_ventoy; update_medicat; update_ubuntu; update_extra; update_raspberrypi
     echo; cmd_status
 }
 
@@ -155,7 +178,7 @@ cmd_status() {
     local m; m=$(ls "$KIT"/MediCat.USB.*.7z 2>/dev/null | sort -V | tail -1 || true)
     if [[ -n "$m" ]]; then echo "  MediCat  $(basename "$m")  $( [[ -f "$m.ok" ]] && echo verified || echo UNVERIFIED )"; else echo "  MediCat  (missing, run update)"; fi
     echo "  ISOs to copy (from isos/):"
-    find "$ISOS" -type f \( -iname '*.iso' -o -iname '*.img' -o -iname '*.wim' -o -iname '*.vhd*' \) -printf '    %P  (%s bytes)\n' 2>/dev/null | sort || true
+    find "$ISOS" -type f \( -iname '*.iso' -o -iname '*.img' -o -iname '*.img.xz' -o -iname '*.wim' -o -iname '*.vhd*' \) -printf '    %P  (%s bytes)\n' 2>/dev/null | sort || true
 }
 
 # ------------------------------------------------------------------ list ----
