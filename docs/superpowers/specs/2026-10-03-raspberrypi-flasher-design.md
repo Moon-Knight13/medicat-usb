@@ -149,6 +149,11 @@ cable or USB, which find the Pi by its MAC address and need no name.
   Asks the Pi to renew its lease so it gets an address at once. Sharing lasts only for the
   SSH session: `pi` runs ssh (no exec) and on exit, Ctrl-C or TERM takes `pi-shared` and
   `pi-local` down, leaving the port free.
+- `reset [--remove]`: the escape hatch. Takes `pi-local` and `pi-shared` down on every
+  device where they are active, runs `nmcli device connect` on those ports so their normal
+  profiles return, and prints the active connections, default routes and whether an
+  `nm-shared` nft table remains (or that it could not check without sudo). `--remove` also
+  deletes both profiles; golden-update re-creates them. Never touches other profiles.
 - `off`: takes the cable profiles down. Any failure after a cable profile is up (no Pi,
   refused share, lost Pi) takes them down again and says so; before SSH over the cable,
   `pi` names the profile holding the port and that `pi off` frees it.

@@ -52,6 +52,14 @@ up, since the Pi's traffic would go through it.
 
 At login the Pi warns if it has seen under-voltage since boot: use a stronger supply.
 
+## If networking looks wrong
+
+    pi reset               take pi-local and pi-shared down, reconnect those ports normally
+    pi reset --remove      also delete both profiles (golden-update re-creates them)
+
+`pi reset` touches no other connection, Wi-Fi or VPN, and then shows the active
+connections, the default routes and whether a sharing firewall table is left.
+
 ## Settings
 
 In `golden/ubuntu/vars/local.yml` (git-ignored): `pi_default_host`, `pi_wifi_ssid`,

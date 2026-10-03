@@ -5,6 +5,8 @@
 #   pi [HOST] local    Ethernet cable only, link-local: no DHCP server, no routing
 #   pi [HOST] share    Ethernet cable, and the Pi gets internet through this laptop for the session
 #   pi off             free the Ethernet port again
+#   pi reset [--remove] undo anything pi did to this laptop's networking (--remove: also
+#                      delete the pi-local and pi-shared profiles; golden-update re-creates them)
 #
 # HOST defaults to DEFAULT_HOST in /etc/golden/pi.conf. Without one, pi skips Wi-Fi and finds
 # the Pi on USB or the cable by its MAC address.
@@ -17,7 +19,7 @@ USB_ADDR=10.12.194.1                                                       # the
 
 die()      { echo "pi: $*" >&2; exit 1; }
 conf_get() { sed -n "s/^$1=//p" "$PI_CONF" 2>/dev/null | head -n1 || true; }
-usage()    { sed -n '2,10s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 1; }
+usage()    { sed -n '2,12s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 1; }
 
 # The Ethernet port the Pi is plugged into: CABLE_IFACE, or the only physical wired port
 # that is not in use on a network. A Pi's own USB link (cdc_ether, rndis_host, cdc_ncm) is
@@ -139,18 +141,50 @@ share_stop() {
     echo "Sharing stopped; Ethernet port $IFACE released."
 }
 
+# Take pi-local and pi-shared down wherever they are active, let NetworkManager put those
+# ports back on their usual profiles, and show the state. Touches no other profile.
+reset_network() {
+    local name dev apath ports=() p out
+    while IFS=: read -r name dev apath; do
+        case "$name" in pi-local|pi-shared) ;; *) continue ;; esac
+        nmcli connection down apath "$apath" >/dev/null 2>&1 || true
+        echo "$name taken down${dev:+ on $dev}"
+        if [[ -n "$dev" ]]; then ports+=("$dev"); fi
+    done < <(nmcli -t -f NAME,DEVICE,ACTIVE-PATH connection show --active 2>/dev/null || true)
+    for p in "${ports[@]}"; do nmcli device connect "$p" >/dev/null 2>&1 || true; done
+    if [[ "$1" == 1 ]]; then
+        nmcli connection delete pi-local >/dev/null 2>&1 || true
+        nmcli connection delete pi-shared >/dev/null 2>&1 || true
+        echo "Removed the pi-local and pi-shared profiles; golden-update re-creates them."
+    fi
+    echo "Active connections:"
+    out=$(nmcli -t -f NAME,DEVICE connection show --active 2>/dev/null || true)
+    awk -F: 'NF { print "  " $1 " (" ($2 == "" ? "no device" : $2) ")" }' <<<"$out"
+    echo "Default routes:"
+    out=$( { ip route show default; ip -6 route show default; } 2>/dev/null || true)
+    awk 'NF { print "  " $0 }' <<<"$out"
+    if out=$(nft list tables 2>/dev/null); then
+        if grep -qi nm-shared <<<"$out"; then echo "A NetworkManager sharing firewall table is still loaded."
+        else echo "No NetworkManager sharing firewall table left."; fi
+    else
+        echo "Sharing firewall tables: could not check without sudo."
+    fi
+}
+
 vpn_up() { nmcli -t -f TYPE connection show --active | grep -E '^(vpn|wireguard|tun)$' >/dev/null 2>&1; }
 
 main() {
-    HOST="" MODE=""
+    HOST="" MODE="" REMOVE=0
     local a
     for a in "$@"; do
         case "$a" in
-            local|share|off) MODE=$a ;;
+            local|share|off|reset) MODE=$a ;;
+            --remove) REMOVE=1 ;;
             -*) usage ;;
             *) [[ -z "$HOST" ]] || usage; HOST=$a ;;
         esac
     done
+    if [[ "$REMOVE" == 1 && "$MODE" != reset ]] || [[ "$MODE" == reset && -n "$HOST" ]]; then usage; fi
     HOST=${HOST:-$(conf_get DEFAULT_HOST)}
 
     case "$MODE" in
@@ -158,6 +192,8 @@ main() {
             nmcli connection down pi-shared >/dev/null 2>&1 || true
             nmcli connection down pi-local >/dev/null 2>&1 || true
             echo "Ethernet port released" ;;
+        reset)
+            reset_network "$REMOVE" ;;
         local)
             cable_up pi-local
             ssh_cable pi-local ;;

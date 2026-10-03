@@ -51,6 +51,7 @@ Golden laptop commands   (golden-help shows this list)
     pi [HOST]                  Shell on the Pi: Wi-Fi, else USB, else the Ethernet cable
     pi [HOST] local | share    Ethernet cable only; share also gives the Pi this laptop's internet
     pi off                     Free the Ethernet port again
+    pi reset [--remove]        Undo anything pi did to this laptop's networking
 
   Other useful commands
     mictest                    Live microphone level: talk and watch the bar (Ctrl+C to stop)

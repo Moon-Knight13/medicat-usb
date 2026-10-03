@@ -206,3 +206,42 @@ rm -f "$T/conn.enxdock" "$T/neigh.enxdock"; : > "$NMLOG"
 if "$RPI/pi" local > "$T/out" 2>&1; then echo "guessed between two free ports"; exit 1; fi
 grep -q "enxdock" "$T/out" && grep -q "enxpi" "$T/out" && grep -q "pi_cable_iface" "$T/out" || { cat "$T/out"; exit 1; }
 if grep -q "^connection up" "$NMLOG"; then echo "brought a profile up without a port"; exit 1; fi
+
+# pi reset: both pi profiles down wherever active, those ports reconnected, nothing else touched
+cat > "$T/bin/nmcli" <<'EOC'
+#!/bin/sh
+echo "$*" >> "$NMLOG"
+case "$*" in
+  "-t -f NAME,DEVICE,ACTIVE-PATH connection show --active")
+    printf '%s\n' "Home Wi-Fi:wlp1s0:/org/freedesktop/NetworkManager/ActiveConnection/1" \
+                  "pi-local:enxdock:/org/freedesktop/NetworkManager/ActiveConnection/5" \
+                  "pi-shared:enxpi:/org/freedesktop/NetworkManager/ActiveConnection/6" \
+                  "work-vpn::/org/freedesktop/NetworkManager/ActiveConnection/7" ;;
+esac
+exit 0
+EOC
+printf '#!/bin/sh\nexit 1\n' > "$T/bin/nft"
+chmod +x "$T/bin/nmcli" "$T/bin/nft"
+: > "$NMLOG"
+"$RPI/pi" reset > "$T/out" 2>&1 || { echo "pi reset failed:"; cat "$T/out"; exit 1; }
+for want in "connection down apath /org/freedesktop/NetworkManager/ActiveConnection/5" \
+            "connection down apath /org/freedesktop/NetworkManager/ActiveConnection/6" \
+            "device connect enxdock" "device connect enxpi"; do
+    grep -qx "$want" "$NMLOG" || { echo "pi reset did not: $want"; cat "$NMLOG"; exit 1; }
+done
+if grep -E "^connection (down|delete|modify)|^device (connect|disconnect)" "$NMLOG" | grep -qvE "ActiveConnection/[56]$|enxdock$|enxpi$"; then
+    echo "pi reset touched another connection:"; cat "$NMLOG"; exit 1
+fi
+if grep -q "^connection delete" "$NMLOG"; then echo "pi reset deleted profiles without --remove"; exit 1; fi
+grep -q "could not check without sudo" "$T/out" || { echo "no firewall status:"; cat "$T/out"; exit 1; }
+: > "$NMLOG"
+"$RPI/pi" reset --remove > "$T/out" 2>&1 || { echo "pi reset --remove failed"; cat "$T/out"; exit 1; }
+grep -qx "connection delete pi-local" "$NMLOG" && grep -qx "connection delete pi-shared" "$NMLOG" || { echo "--remove did not delete both"; cat "$NMLOG"; exit 1; }
+[[ $(grep -c "^connection delete" "$NMLOG") == 2 ]] || { echo "--remove deleted more"; exit 1; }
+grep -q "golden-update" "$T/out" || { cat "$T/out"; exit 1; }
+# Nothing active: still succeeds; --remove only with reset; reset takes no host
+printf '#!/bin/sh\necho "$*" >> "$NMLOG"\nexit 0\n' > "$T/bin/nmcli"; : > "$NMLOG"
+"$RPI/pi" reset > "$T/out" 2>&1 || { echo "pi reset failed with nothing active"; cat "$T/out"; exit 1; }
+if grep -qE "^connection down|^device connect" "$NMLOG"; then echo "pi reset acted with nothing active"; exit 1; fi
+if "$RPI/pi" local --remove >/dev/null 2>&1; then echo "accepted --remove without reset"; exit 1; fi
+if "$RPI/pi" somehost reset >/dev/null 2>&1; then echo "accepted a host with reset"; exit 1; fi
