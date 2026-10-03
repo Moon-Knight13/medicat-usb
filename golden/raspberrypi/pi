@@ -148,17 +148,23 @@ share_stop() {
     echo "Sharing stopped; Ethernet port $IFACE released."
 }
 
-# Take pi-local and pi-shared down wherever they are active, let NetworkManager put those
-# ports back on their usual profiles, and show the state. Touches no other profile.
+# Take pi-local and pi-shared down wherever they are active and show the state. NetworkManager
+# puts those ports back on their usual profiles by itself; asking it to connect a port could
+# pick a pi profile again. Touches no other profile.
 reset_network() {
-    local name dev apath ports=() p out
+    local name dev apath type out
     while IFS=: read -r name dev apath; do
         case "$name" in pi-local|pi-shared) ;; *) continue ;; esac
         nmcli connection down apath "$apath" >/dev/null 2>&1 || true
         echo "$name taken down${dev:+ on $dev}"
-        if [[ -n "$dev" ]]; then ports+=("$dev"); fi
     done < <(nmcli -t -f NAME,DEVICE,ACTIVE-PATH connection show --active 2>/dev/null || true)
-    for p in "${ports[@]}"; do nmcli device connect "$p" >/dev/null 2>&1 || true; done
+    while IFS=: read -r dev type; do                 # check: no wired port left on a pi profile
+        [[ "$type" == ethernet ]] || continue
+        name=$(nmcli -g GENERAL.CONNECTION device show "$dev" 2>/dev/null || true)
+        case "$name" in pi-local|pi-shared) ;; *) continue ;; esac
+        nmcli connection down "$name" >/dev/null 2>&1 || true
+        echo "$name still active on $dev; taken down again"
+    done < <(nmcli -t -f DEVICE,TYPE device 2>/dev/null || true)
     if [[ "$1" == 1 ]]; then
         nmcli connection delete pi-local >/dev/null 2>&1 || true
         nmcli connection delete pi-shared >/dev/null 2>&1 || true

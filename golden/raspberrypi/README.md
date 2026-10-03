@@ -54,10 +54,12 @@ At login the Pi warns if it has seen under-voltage since boot: use a stronger su
 
 ## If networking looks wrong
 
-    pi reset               take pi-local and pi-shared down, reconnect those ports normally
+    pi reset               take pi-local and pi-shared down wherever they are active
     pi reset --remove      also delete both profiles (golden-update re-creates them)
 
-`pi reset` touches no other connection, Wi-Fi or VPN, and then shows the active
+NetworkManager then puts those ports back on their usual profiles by itself. `pi reset`
+checks that no wired port is left on pi-local or pi-shared (taking one down again and
+saying so), touches no other connection, Wi-Fi or VPN, and then shows the active
 connections, the default routes and whether a sharing firewall table is left.
 
 ## Settings

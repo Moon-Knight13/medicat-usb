@@ -226,7 +226,9 @@ if "$RPI/pi" local > "$T/out" 2>&1; then echo "guessed between two free ports"; 
 grep -q "enxdock" "$T/out" && grep -q "enxpi" "$T/out" && grep -q "pi_cable_iface" "$T/out" || { cat "$T/out"; exit 1; }
 if grep -q "^connection up" "$NMLOG"; then echo "brought a profile up without a port"; exit 1; fi
 
-# pi reset: both pi profiles down wherever active, those ports reconnected, nothing else touched
+# pi reset: both pi profiles down wherever active, no port reconnected by hand (NetworkManager
+# brings each port's usual profile back itself), nothing else touched. This nmcli reports
+# pi-shared active on enxpi again once anything runs "device connect", or always with $T/sticky.
 cat > "$T/bin/nmcli" <<'EOC'
 #!/bin/sh
 echo "$*" >> "$NMLOG"
@@ -236,6 +238,10 @@ case "$*" in
                   "pi-local:enxdock:/org/freedesktop/NetworkManager/ActiveConnection/5" \
                   "pi-shared:enxpi:/org/freedesktop/NetworkManager/ActiveConnection/6" \
                   "work-vpn::/org/freedesktop/NetworkManager/ActiveConnection/7" ;;
+  "-t -f DEVICE,TYPE device") printf '%s\n' "wlp1s0:wifi" "enxdock:ethernet" "enxpi:ethernet" ;;
+  "-g GENERAL.CONNECTION device show enxdock") echo "Wired connection 1" ;;
+  "-g GENERAL.CONNECTION device show enxpi")
+    if [ -e "$T/sticky" ] || grep -q "^device connect" "$NMLOG"; then echo pi-shared; fi ;;
 esac
 exit 0
 EOC
@@ -244,15 +250,25 @@ chmod +x "$T/bin/nmcli" "$T/bin/nft"
 : > "$NMLOG"
 "$RPI/pi" reset > "$T/out" 2>&1 || { echo "pi reset failed:"; cat "$T/out"; exit 1; }
 for want in "connection down apath /org/freedesktop/NetworkManager/ActiveConnection/5" \
-            "connection down apath /org/freedesktop/NetworkManager/ActiveConnection/6" \
-            "device connect enxdock" "device connect enxpi"; do
+            "connection down apath /org/freedesktop/NetworkManager/ActiveConnection/6"; do
     grep -qx "$want" "$NMLOG" || { echo "pi reset did not: $want"; cat "$NMLOG"; exit 1; }
 done
-if grep -E "^connection (down|delete|modify)|^device (connect|disconnect)" "$NMLOG" | grep -qvE "ActiveConnection/[56]$|enxdock$|enxpi$"; then
+if grep -q "^device connect" "$NMLOG"; then echo "pi reset reconnected a port by hand:"; cat "$NMLOG"; exit 1; fi
+if grep -q "still active" "$T/out"; then echo "pi reset reported a pi profile that was down:"; cat "$T/out"; exit 1; fi
+if grep -E "^connection (down|delete|modify)|^device (connect|disconnect)" "$NMLOG" | grep -qvE "ActiveConnection/[56]$"; then
     echo "pi reset touched another connection:"; cat "$NMLOG"; exit 1
 fi
 if grep -q "^connection delete" "$NMLOG"; then echo "pi reset deleted profiles without --remove"; exit 1; fi
 grep -q "could not check without sudo" "$T/out" || { echo "no firewall status:"; cat "$T/out"; exit 1; }
+# A pi profile still active on a wired port afterwards is brought down again and reported
+touch "$T/sticky"; : > "$NMLOG"
+"$RPI/pi" reset > "$T/out" 2>&1 || { echo "pi reset failed:"; cat "$T/out"; exit 1; }
+grep -qx "connection down pi-shared" "$NMLOG" || { echo "pi-shared left active after reset:"; cat "$NMLOG"; exit 1; }
+grep -q "pi-shared still active on enxpi; taken down again" "$T/out" || { echo "not reported:"; cat "$T/out"; exit 1; }
+if grep -E "^connection (down|delete|modify)|^device (connect|disconnect)" "$NMLOG" | grep -qvE "ActiveConnection/[56]$|^connection down pi-shared$"; then
+    echo "pi reset touched another connection:"; cat "$NMLOG"; exit 1
+fi
+rm "$T/sticky"
 : > "$NMLOG"
 "$RPI/pi" reset --remove > "$T/out" 2>&1 || { echo "pi reset --remove failed"; cat "$T/out"; exit 1; }
 grep -qx "connection delete pi-local" "$NMLOG" && grep -qx "connection delete pi-shared" "$NMLOG" || { echo "--remove did not delete both"; cat "$NMLOG"; exit 1; }
