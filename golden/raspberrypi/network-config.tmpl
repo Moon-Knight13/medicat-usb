@@ -1,0 +1,11 @@
+# Written by golden/raspberrypi/pi-flash at flash time. Applied once, on first boot.
+network:
+  version: 2
+  renderer: NetworkManager
+  wifis:
+    wlan0:
+      dhcp4: true
+      optional: true
+      regulatory-domain: ${country}
+      access-points:
+        ${ssid}: ${access_point}

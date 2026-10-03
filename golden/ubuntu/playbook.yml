@@ -829,6 +829,54 @@
         mode: preserve
         directory_mode: "0755"
 
+    # ---------------------------------------------------------- raspberry pi --
+    # pi-flash writes a Pi's SD card; pi opens a shell on it (golden/raspberrypi).
+    - name: Raspberry Pi tools
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../raspberrypi/"
+        dest: /usr/local/share/golden/raspberrypi/
+        mode: preserve
+        directory_mode: "0755"
+
+    - name: Raspberry Pi commands
+      ansible.builtin.file:
+        src: "/usr/local/share/golden/raspberrypi/{{ item }}"
+        dest: "/usr/local/bin/{{ item }}"
+        state: link
+        force: true
+      loop: [pi-flash, pi]
+
+    - name: Raspberry Pi settings (pi_* in vars/local.yml)
+      ansible.builtin.template:
+        src: pi.conf.j2
+        dest: /etc/golden/pi.conf
+        mode: "0644"
+
+    # Never start on their own: while one is up, the port cannot join a normal wired network.
+    - name: Ethernet cable profiles for a Pi (pi local, pi share)
+      ansible.builtin.copy:
+        dest: "/etc/NetworkManager/system-connections/{{ item.name }}.nmconnection"
+        mode: "0600"
+        content: |
+          [connection]
+          id={{ item.name }}
+          type=ethernet
+          autoconnect=false
+
+          [ethernet]
+
+          [ipv4]
+          method={{ item.ipv4 }}
+
+          [ipv6]
+          method={{ item.ipv6 }}
+      loop:
+        - { name: pi-local, ipv4: link-local, ipv6: link-local }
+        - { name: pi-shared, ipv4: shared, ipv6: ignore }
+      loop_control:
+        label: "{{ item.name }}"
+      notify: Reload NetworkManager connections
+
     # ------------------------------------------------------------------ help --
     - name: Golden commands (golden-help lists them; golden-update runs golden-update.sh)
       ansible.builtin.copy:

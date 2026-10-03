@@ -12,3 +12,10 @@ vpns:
     protocol: anyconnect
     authgroup: GROUP
     username: your-user
+
+# Raspberry Pi (pi-flash, pi). All optional.
+pi_default_host: ""        # hostname `pi` uses when you give none, e.g. kitchen-pi
+pi_wifi_ssid: ""           # Wi-Fi for new Pis; this laptop must have it saved. Empty: the current Wi-Fi
+pi_wifi_country: GB        # Wi-Fi regulatory country
+pi_cable_iface: ""         # Ethernet port for `pi local|share` when the laptop has several
+pi_authorized_keys: []     # extra public keys, e.g. your other machines: ["ssh-ed25519 AAAA... you@pc"]
