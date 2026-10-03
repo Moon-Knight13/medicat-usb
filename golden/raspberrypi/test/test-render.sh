@@ -74,6 +74,17 @@ n = yaml.safe_load(raw)
 assert n["network"]["wifis"]["wlan0"]["access-points"] == {"Café 📶": {"password": "pässwörd 🔑"}}
 PY
 
+# Characters YAML forbids or folds (DEL, C1 controls) round-trip as escapes
+python3 - "$RPI" "$T/y" "$KEY1" <<'PY'
+import os, subprocess, sys, yaml
+rpi, out, key = sys.argv[1:]
+ssid, psk = "a\x7fb\x85\x9bc", "p\x7f\x85w"
+env = dict(os.environ, PI_HOSTNAME="testpi", PI_USER="tester", PI_SSH_KEYS=key, PI_WIFI_SSID=ssid, PI_WIFI_PSK=psk)
+subprocess.run([sys.executable, f"{rpi}/render.py", rpi, out], env=env, check=True)
+n = yaml.safe_load(open(f"{out}/network-config", encoding="utf-8"))
+assert n["network"]["wifis"]["wlan0"]["access-points"] == {ssid: {"password": psk}}, n
+PY
+
 # Refusals
 if PI_HOSTNAME=Bad_Name PI_USER=tester PI_SSH_KEYS="$KEY1" render "$T/d" 2>/dev/null; then echo "accepted bad hostname"; exit 1; fi
 if PI_HOSTNAME=testpi PI_USER=tester PI_SSH_KEYS="" render "$T/e" 2>/dev/null; then echo "accepted no keys"; exit 1; fi

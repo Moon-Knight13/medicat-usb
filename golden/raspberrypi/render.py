@@ -18,9 +18,15 @@ from string import Template
 NO_WIFI = "# Written by golden/raspberrypi/pi-flash: no Wi-Fi on this Pi.\nnetwork:\n  version: 2\n  renderer: NetworkManager\n"
 
 
+# Characters YAML does not allow raw (DEL, C1 controls, lone surrogates); json.dumps already
+# escapes the other control characters.
+YAML_FORBIDDEN = re.compile("[\x7f-\x9f\ud800-\udfff]")
+
+
 def q(value):
-    """A JSON value is valid YAML, and json.dumps escapes everything that matters."""
-    return json.dumps(value, ensure_ascii=False)
+    """A JSON value is valid YAML once the characters YAML forbids are escaped as \\uXXXX."""
+    text = json.dumps(value, ensure_ascii=False)
+    return YAML_FORBIDDEN.sub(lambda m: f"\\u{ord(m.group()):04x}", text)
 
 
 def values(env):
