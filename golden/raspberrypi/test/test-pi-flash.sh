@@ -68,3 +68,83 @@ ud = yaml.safe_load(open(f"{d}/user-data"))
 assert ud["hostname"] == "testpi"
 assert len(ud["users"][0]["ssh_authorized_keys"]) == 1, f"Expected 1 key, got {len(ud['users'][0]['ssh_authorized_keys'])}"
 PY
+
+# Mount points: only /media and /run/media mounts may be on a card
+mounts_ok <<<"" || { echo "refused an unmounted card"; exit 1; }
+printf '%s\n' "/media/u/bootfs" "" "/run/media/u/rootfs" | mounts_ok || { echo "refused desktop mounts"; exit 1; }
+for m in / /boot /boot/efi /home /cdrom "[SWAP]" /mediax; do
+    if printf '%s\n' "/media/u/bootfs" "$m" | mounts_ok; then echo "accepted a card with $m mounted"; exit 1; fi
+done
+
+# choose_card through a fake lsblk and findmnt. The image is on sdb (the MediCat stick);
+# sdc has / mounted (a live system); sda and sdd are cards.
+F="$T/fake"; mkdir -p "$F"
+cat > "$T/bin/lsblk" <<'EOC'
+#!/bin/sh
+case "$*" in
+  "-dnbo NAME,RM,SIZE,TYPE") [ -e "$F/lsblk-fails" ] && exit 1; cat "$F/disks" ;;
+  "-lnpo MOUNTPOINTS /dev/"*) d=${3#/dev/}; [ -e "$F/mnt.$d" ] && cat "$F/mnt.$d"; exit 0 ;;
+  "-lnso NAME,TYPE /dev/sdb1") printf '%s\n' "sdb1 part" "sdb  disk" ;;
+  "-o NAME,SIZE,MODEL,LABEL /dev/"*) echo "INFO ${3#/dev/}" ;;
+  "-lnpo NAME,TYPE,MOUNTPOINTS /dev/sda") printf '%s\n' "/dev/sda disk" "/dev/sda1 part /media/u/bootfs" "/dev/sda2 part" ;;
+  *) echo "lsblk: unexpected $*" >&2; exit 1 ;;
+esac
+EOC
+cat > "$T/bin/findmnt" <<'EOC'
+#!/bin/sh
+[ -e "$F/findmnt-fails" ] && exit 1
+echo /dev/sdb1
+EOC
+chmod +x "$T/bin/lsblk" "$T/bin/findmnt"; export F
+printf '%s\n' "sda 1 31914983424 disk" "sdb 1 61530439680 disk" "sdc 1 15931539456 disk" "sdd 1 7969177600 disk" \
+              "nvme0n1 0 1000204886016 disk" > "$F/disks"
+echo "/" > "$F/mnt.sdc"; echo "/media/u/bootfs" > "$F/mnt.sdd"
+IMAGE=/media/u/MEDICAT/RaspberryPi/image.img.xz
+pick() { (DEVICE=$1; choose_card; echo "CHOSEN $DEVICE") <<<"yes" > "$T/out" 2>&1; }
+if pick ""; then echo "chose with two cards in"; exit 1; fi
+grep -q "INFO sda" "$T/out" && grep -q "INFO sdd" "$T/out" || { echo "did not list the cards:"; cat "$T/out"; exit 1; }
+if grep -q "INFO sd[bc]" "$T/out"; then echo "listed the image stick or a system disk"; cat "$T/out"; exit 1; fi
+if pick /dev/sdb; then echo "accepted the disk holding the image"; exit 1; fi
+grep -q "holds the Raspberry Pi image" "$T/out" || { cat "$T/out"; exit 1; }
+if pick /dev/sdc; then echo "accepted a disk with / mounted"; exit 1; fi
+grep -q "mounted outside /media" "$T/out" || { cat "$T/out"; exit 1; }
+pick /dev/sdd || { echo "refused a card mounted by the desktop"; cat "$T/out"; exit 1; }
+rm "$F/mnt.sdd"; sed -i '/^sdd /d' "$F/disks"
+pick "" || { echo "refused the one card"; cat "$T/out"; exit 1; }
+grep -q "CHOSEN /dev/sda" "$T/out" || { cat "$T/out"; exit 1; }
+touch "$F/findmnt-fails"
+if pick ""; then echo "chose a card without knowing where the image is"; exit 1; fi
+rm "$F/findmnt-fails"; touch "$F/lsblk-fails"
+if pick ""; then echo "chose a card when lsblk failed"; exit 1; fi
+rm "$F/lsblk-fails"
+
+# write_card: a partition that will not unmount stops everything before dd (exit 2)
+printf '#!/bin/sh\necho "$*" >> "$F/udisks.log"\nexit 1\n' > "$T/bin/udisksctl"
+printf '#!/bin/sh\necho "$*" >> "$F/sudo.log"\nexit 0\n' > "$T/bin/sudo"
+printf '#!/bin/sh\nexit 0\n' > "$T/bin/xzcat"
+chmod +x "$T/bin/udisksctl" "$T/bin/sudo" "$T/bin/xzcat"
+set +e; (DEVICE=/dev/sda; write_card) > "$T/out" 2>&1; rc=$?; set -e
+[[ $rc == 2 ]] || { echo "write_card with a busy partition exited $rc"; cat "$T/out"; exit 1; }
+[[ ! -e "$F/sudo.log" ]] || { echo "wrote to a card with a mounted partition"; exit 1; }
+grep -qx "unmount -b /dev/sda1" "$F/udisks.log" || { echo "did not unmount the mounted partition"; exit 1; }
+if grep -q sda2 "$F/udisks.log"; then echo "unmounted a partition that was not mounted"; exit 1; fi
+
+# Download: to a .part file, resumed, renamed only when complete; failure exits 1
+cat > "$T/bin/curl" <<'EOC'
+#!/bin/sh
+echo "$*" > "$F/curl.args"
+for a; do [ "$prev" = -o ] && out=$a; prev=$a; done
+printf 'part' >> "$out"
+[ -e "$F/curl-fails" ] && exit 18
+printf 'rest' >> "$out"
+EOC
+chmod +x "$T/bin/curl"; touch "$F/curl-fails"
+dl() { (HERE="$T/nohere" USER=nobody-test CACHE="$T/cache" PI_IMAGE_FILE=pi.img.xz PI_IMAGE_URL=https://example.invalid/pi.img.xz; find_image) > "$T/out" 2>&1; }
+set +e; dl; rc=$?; set -e
+[[ $rc == 1 ]] || { echo "failed download exited $rc"; cat "$T/out"; exit 1; }
+[[ ! -e "$T/cache/pi.img.xz" && -s "$T/cache/pi.img.xz.part" ]] || { echo "partial download not kept as .part"; ls -l "$T/cache"; exit 1; }
+rm "$F/curl-fails"
+dl || { echo "resumed download failed"; cat "$T/out"; exit 1; }
+grep -q -- "-C - -o $T/cache/pi.img.xz.part" "$F/curl.args" || { echo "not resumed into .part:"; cat "$F/curl.args"; exit 1; }
+[[ "$(cat "$T/cache/pi.img.xz")" == partpartrest && ! -e "$T/cache/pi.img.xz.part" ]] || { echo "download not resumed and renamed"; exit 1; }
+[[ "$(tail -n1 "$T/out")" == "$T/cache/pi.img.xz" ]] || { echo "find_image printed: $(cat "$T/out")"; exit 1; }

@@ -40,6 +40,26 @@ check_device() {
     return 1
 }
 
+# Succeed if every mount point read (one per line) is a desktop mount under /media or /run/media.
+mounts_ok() { awk 'NF && $0 !~ /^\/(run\/)?media\// { bad = 1 } END { exit bad }'; }
+
+# The disk(s) under the file system holding FILE (the MediCat stick when the image is on it).
+image_disks() {
+    local src
+    src=$(findmnt -no SOURCE -T "$1") || return 1
+    src=${src%%\[*}                                   # btrfs: /dev/sdb1[/subvol]
+    if [[ "$src" != /dev/* ]]; then return 0; fi      # tmpfs, network share: no disk
+    lsblk -lnso NAME,TYPE "$src" | awk '$2 == "disk" { print $1 }'
+}
+
+# Why disk NAME must not be written; empty if it may. OWN_DISKS: the disks holding the image.
+card_problem() {
+    local m
+    if grep -qxF "$1" <<<"$OWN_DISKS"; then echo "holds the Raspberry Pi image"; return 0; fi
+    if ! m=$(lsblk -lnpo MOUNTPOINTS "/dev/$1"); then echo "cannot be read by lsblk"; return 0; fi
+    mounts_ok <<<"$m" || echo "has a partition mounted outside /media (this laptop's system?)"
+}
+
 # UUID of this laptop's saved Wi-Fi connection for SSID; empty if there is none.
 wifi_connection_for() {
     local uuid type
@@ -110,7 +130,10 @@ find_image() {
     done
     mkdir -p "$CACHE"
     echo "Downloading $PI_IMAGE_FILE (about 550 MB)..." >&2
-    curl -fL --retry 3 -C - -o "$CACHE/$PI_IMAGE_FILE" "$PI_IMAGE_URL" >&2 || die "download failed" 2
+    # Into .part, so an interrupted download resumes next time and is never checked as whole.
+    curl -fL --retry 3 -C - -o "$CACHE/$PI_IMAGE_FILE.part" "$PI_IMAGE_URL" >&2 \
+        || die "download failed; run pi-flash again to resume it"
+    mv "$CACHE/$PI_IMAGE_FILE.part" "$CACHE/$PI_IMAGE_FILE"
     echo "$CACHE/$PI_IMAGE_FILE"
 }
 
@@ -124,36 +147,49 @@ verify_image() {
 }
 
 choose_card() {
-    local cands ok
-    mapfile -t cands < <(lsblk -dnbo NAME,RM,SIZE,TYPE | card_candidates)
+    local list all cands=() c why ok
+    list=$(lsblk -dnbo NAME,RM,SIZE,TYPE) || die "lsblk failed; cannot tell which disk is the card"
+    OWN_DISKS=$(image_disks "$IMAGE") || die "cannot tell which disk holds $IMAGE"
+    mapfile -t all < <(card_candidates <<<"$list")
+    for c in "${all[@]}"; do
+        if [[ -z "$(card_problem "$c")" ]]; then cands+=("$c"); fi
+    done
     if [[ -n "$DEVICE" ]]; then
-        check_device "$DEVICE" "${cands[@]}" || die "$DEVICE is not a removable card of 256 GB or less"
+        check_device "$DEVICE" "${all[@]}" || die "$DEVICE is not a removable card of 256 GB or less"
+        why=$(card_problem "${DEVICE#/dev/}")
+        [[ -z "$why" ]] || die "$DEVICE $why"
     else
         case ${#cands[@]} in
-            0) die "no SD card found (removable, 256 GB or less)" ;;
+            0) die "no SD card found (removable, 256 GB or less, not the stick holding the image)" ;;
             1) DEVICE=${cands[0]} ;;
-            *) die "several cards found (${cands[*]}); choose one with --device /dev/NAME" ;;
+            *) for c in "${cands[@]}"; do echo; lsblk -o NAME,SIZE,MODEL,LABEL "/dev/$c"; done
+               echo; die "several cards found (${cands[*]}); choose one with --device /dev/NAME" ;;
         esac
     fi
     DEVICE=/dev/${DEVICE#/dev/}
-    if lsblk -lnpo MOUNTPOINTS "$DEVICE" | grep -qxE '/|/boot|/boot/efi'; then die "$DEVICE holds this laptop's system"; fi
     echo; lsblk -o NAME,SIZE,MODEL,LABEL "$DEVICE"; echo
     read -rp "Everything on $DEVICE will be erased. Type yes to continue: " ok
     [[ "$ok" == yes ]] || die "stopped; nothing was written"
 }
 
 write_card() {
-    local p boot mnt
-    while read -r p; do udisksctl unmount -b "$p" >/dev/null 2>&1 || true; done \
-        < <(lsblk -lnpo NAME,TYPE "$DEVICE" | awk '$2 == "part" { print $1 }')
+    local parts p boot mnt out
+    parts=$(lsblk -lnpo NAME,TYPE,MOUNTPOINTS "$DEVICE") || die "could not list the partitions of $DEVICE" 2
+    for p in $(awk '$2 == "part" && $3 != "" { print $1 }' <<<"$parts"); do
+        udisksctl unmount -b "$p" >/dev/null || die "could not unmount $p; close what uses it and try again" 2
+    done
     echo "Writing $(basename "$IMAGE") to $DEVICE (sudo may ask for your password)..."
     xzcat "$IMAGE" | sudo dd of="$DEVICE" bs=4M conv=fsync status=progress || die "writing $DEVICE failed" 2
-    sudo partprobe "$DEVICE"; sudo udevadm settle
-    boot=$(lsblk -lnpo NAME,TYPE "$DEVICE" | awk '$2 == "part" { print $1; exit }')
+    sudo partprobe "$DEVICE" || die "partprobe could not re-read the partitions on $DEVICE" 2
+    sudo udevadm settle || die "udevadm settle failed after writing $DEVICE" 2
+    parts=$(lsblk -lnpo NAME,TYPE "$DEVICE") || die "could not list the partitions of $DEVICE" 2
+    boot=$(awk '$2 == "part" { print $1; exit }' <<<"$parts")
     [[ -n "$boot" ]] || die "no boot partition on $DEVICE after writing" 2
-    mnt=$(lsblk -lnpo MOUNTPOINTS "$boot" | head -n1)     # the desktop may have mounted it already
+    mnt=$(lsblk -lnpo MOUNTPOINTS "$boot") || die "could not read the mount point of $boot" 2
+    mnt=${mnt%%$'\n'*}                                     # the desktop may have mounted it already
     if [[ -z "$mnt" ]]; then
-        mnt=$(udisksctl mount -b "$boot" | sed -n 's/^Mounted .* at \(.*\)$/\1/p' | sed 's/\.$//')
+        out=$(udisksctl mount -b "$boot") || die "could not mount $boot" 2
+        mnt=$(sed -n 's/^Mounted .* at \(.*\)$/\1/p' <<<"$out" | sed 's/\.$//')
     fi
     [[ -d "$mnt" ]] || die "could not mount $boot" 2
     render_to "$mnt" || die "could not write the first-boot files" 2
@@ -162,6 +198,7 @@ write_card() {
 }
 
 main() {
+    [[ $EUID -ne 0 ]] || die "run pi-flash as your user; it uses sudo itself"
     NAME="" NO_WIFI=0 WANT_PASSWORD=0 DEVICE="" RENDER_ONLY="" PI_PASSWORD_HASH=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -185,7 +222,7 @@ main() {
     fi
 
     local cmd
-    for cmd in lsblk udisksctl xzcat python3 curl sha256sum openssl; do
+    for cmd in lsblk findmnt udisksctl nmcli xzcat python3 curl sha256sum openssl; do
         command -v "$cmd" >/dev/null 2>&1 || die "missing command: $cmd"
     done
     # shellcheck source=image.conf
@@ -197,6 +234,7 @@ main() {
     choose_card
     write_card
     ssh-keygen -R "$NAME.local" >/dev/null 2>&1 || true   # a re-flashed Pi has new host keys
+    ssh-keygen -R 10.12.194.1 >/dev/null 2>&1 || true       # its USB address, too
     echo
     echo "Done. Put the card in the Pi, power it, and after about 2 minutes: pi $NAME"
 }
