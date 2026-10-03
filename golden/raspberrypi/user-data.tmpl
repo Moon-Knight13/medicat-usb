@@ -1,0 +1,56 @@
+#cloud-config
+# Written by golden/raspberrypi/pi-flash at flash time. Applied once, on first boot.
+hostname: ${hostname}
+manage_etc_hosts: true
+timezone: ${timezone}
+users:
+- name: ${user}
+  groups: [users, adm, dialout, audio, netdev, video, plugdev, cdrom, games, input, gpio, spi, i2c, render, sudo]
+  shell: /bin/bash
+  ${password_lines}
+  sudo: ${sudo}
+  ssh_authorized_keys: ${ssh_keys}
+ssh_pwauth: false
+package_update: true
+packages: [unattended-upgrades]
+write_files:
+# Pi end of a direct Ethernet cable to a laptop (pi local / pi share): DHCP when the laptop
+# shares its connection, link-local otherwise. Metric 700 keeps Wi-Fi the default route.
+- path: /etc/NetworkManager/system-connections/eth-direct.nmconnection
+  permissions: '0600'
+  content: |
+    [connection]
+    id=eth-direct
+    type=ethernet
+    interface-name=eth0
+    autoconnect-priority=10
+
+    [ethernet]
+
+    [ipv4]
+    method=auto
+    link-local=enabled
+    dhcp-timeout=2147483647
+    may-fail=true
+    route-metric=700
+
+    [ipv6]
+    method=auto
+- path: /etc/profile.d/golden-power.sh
+  permissions: '0644'
+  content: |
+    # Warn at login when the Pi has seen under-voltage since boot (a cause of SD card corruption).
+    t=$$(vcgencmd get_throttled 2>/dev/null | cut -d= -f2)
+    if [ -n "$$t" ] && [ "$$t" != "0x0" ]; then
+        echo "WARNING: under-voltage or throttling since boot (get_throttled=$$t). Use a stronger power supply."
+    fi
+runcmd:
+- [systemctl, enable, --now, ssh]
+- [nmcli, connection, reload]
+# USB networking only on boards with a device-mode USB port; never on a Pi 3 B+.
+- - sh
+  - -c
+  - |
+    case "$$(tr -d '\0' </proc/device-tree/model)" in
+        *"Zero 2 W"*|*"Pi 4 Model"*|*"Pi 5 Model"*) rpi-usb-gadget on && systemctl reboot ;;
+    esac
