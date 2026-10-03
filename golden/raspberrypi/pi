@@ -19,22 +19,34 @@ die()      { echo "pi: $*" >&2; exit 1; }
 conf_get() { sed -n "s/^$1=//p" "$PI_CONF" 2>/dev/null | head -n1 || true; }
 usage()    { sed -n '2,10s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 1; }
 
-# The Ethernet port the Pi is plugged into: CABLE_IFACE, or the only physical wired port.
-# A Pi's own USB link (cdc_ether, rndis_host, cdc_ncm) is not a cable port.
+# The Ethernet port the Pi is plugged into: CABLE_IFACE, or the only physical wired port
+# that is not in use on a network. A Pi's own USB link (cdc_ether, rndis_host, cdc_ncm) is
+# not a cable port. Ports are never taken over from a real network.
 cable_iface() {
-    local want dev type drv found=()
+    local want dev type drv conn ports=() free=() busy=() list
     want=$(conf_get CABLE_IFACE)
-    if [[ -n "$want" ]]; then echo "$want"; return 0; fi
+    if [[ -n "$want" ]]; then
+        conn=$(port_in_use "$want")
+        [[ -z "$conn" ]] || die "$want is connected to a network ($conn); pi will not take it over. Unplug it from the network and plug in the Pi, or change pi_cable_iface."
+        echo "$want"; return 0
+    fi
     while IFS=: read -r dev type; do
         [[ "$type" == ethernet && -e "$SYS_NET/$dev/device" ]] || continue
         drv=$(basename "$(readlink "$SYS_NET/$dev/device/driver" 2>/dev/null || true)")
         case "$drv" in cdc_ether|rndis_host|cdc_ncm) continue ;; esac
-        found+=("$dev")
+        ports+=("$dev")
     done < <(nmcli -t -f DEVICE,TYPE device)
-    case ${#found[@]} in
-        1) echo "${found[0]}" ;;
-        0) die "no Ethernet port found; plug in the adapter or dock" ;;
-        *) die "several Ethernet ports (${found[*]}); set pi_cable_iface in vars/local.yml" ;;
+    for dev in "${ports[@]}"; do
+        conn=$(port_in_use "$dev")
+        if [[ -z "$conn" ]]; then free+=("$dev"); else busy+=("$dev on $conn"); fi
+    done
+    list=$(printf '%s, ' "${busy[@]}"); list=${list%, }
+    case ${#free[@]} in
+        1) if [[ ${#busy[@]} -gt 0 ]]; then echo "Skipping Ethernet ports in use: $list" >&2; fi
+           echo "${free[0]}" ;;
+        0) [[ ${#busy[@]} -gt 0 ]] || die "no Ethernet port found; plug in the adapter or dock"
+           die "every Ethernet port is in use ($list); unplug one from the network or plug in a USB Ethernet adapter for the Pi" ;;
+        *) die "several free Ethernet ports (${free[*]}); set pi_cable_iface in vars/local.yml" ;;
     esac
 }
 
@@ -59,6 +71,30 @@ only_pi_on_cable() {
             k = split(ouis, o, " "); for (i = 1; i <= k; i++) if (index(mac, o[i]) == 1) exit 0
             exit 1
         }'
+}
+
+# Fail if the port shows a real network: a neighbour flagged as router, an IPv6 default or
+# router-advertised route, or an IPv4 lease on a connection that is not one of ours.
+cable_is_private() {
+    local out conn
+    out=$(ip -6 neigh show dev "$1") || return 1
+    if grep -qw router <<<"$out"; then return 1; fi
+    out=$(ip -6 route show dev "$1") || return 1
+    if grep -qE '^default|proto ra' <<<"$out"; then return 1; fi
+    conn=$(nmcli -g GENERAL.CONNECTION device show "$1" 2>/dev/null || true)
+    case "$conn" in pi-local|pi-shared) return 0 ;; esac
+    out=$(ip -4 -o addr show dev "$1") || return 1
+    if awk '$3 == "inet" && $4 !~ /^169\.254\./ { found = 1 } END { exit !found }' <<<"$out"; then return 1; fi
+    return 0
+}
+
+# The connection holding PORT when it is on a real network and not ours; empty if PORT is free
+# (unused, only trying to connect, or held by pi-local or pi-shared).
+port_in_use() {
+    local conn
+    conn=$(nmcli -g GENERAL.CONNECTION device show "$1" 2>/dev/null || true)
+    case "$conn" in ""|pi-local|pi-shared) return 0 ;; esac
+    cable_is_private "$1" || echo "$conn"
 }
 
 # Free the cable port again, then stop with MESSAGE.
@@ -119,7 +155,9 @@ main() {
             ssh_cable pi-local ;;
         share)
             cable_up pi-local        # only a Pi may be on this cable before we serve DHCP on it
-            only_pi_on_cable "$IFACE" || cable_fail "other devices on this cable; is it plugged into a network? use: pi local"
+            if ! only_pi_on_cable "$IFACE" || ! cable_is_private "$IFACE"; then
+                cable_fail "other devices on this cable; is it plugged into a network? use: pi local"
+            fi
             if vpn_up; then echo "Warning: a VPN is up; the Pi's internet traffic will go through it." >&2; fi
             nmcli -w 15 connection up pi-shared ifname "$IFACE" >/dev/null || cable_fail "could not share on $IFACE"
             echo "Sharing this laptop's connection with the Pi"

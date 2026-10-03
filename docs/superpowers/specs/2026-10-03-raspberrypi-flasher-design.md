@@ -142,8 +142,9 @@ cable or USB, which find the Pi by its MAC address and need no name.
 - `local`: cable, link-local only. No DHCP server, no routing.
 - `share`: cable, NetworkManager shared mode (DHCP and NAT through the laptop). Refused
   unless the Pi is the only device on the cable (exactly one link-layer address in the
-  IPv6 neighbour table after the all-nodes ping, with a Raspberry Pi prefix), so the laptop
-  never serves DHCP on someone else's network. Prints a warning when the laptop has a VPN up, since the Pi's
+  IPv6 neighbour table after the all-nodes ping, with a Raspberry Pi prefix) and the cable
+  shows no network (no neighbour flagged `router`, no IPv6 default or `proto ra` route), so
+  the laptop never serves DHCP on someone else's network. Prints a warning when the laptop has a VPN up, since the Pi's
   traffic would then leave through it (for example into a work network).
   Asks the Pi to renew its lease so it gets an address at once.
 - `off`: takes the cable profiles down. Any failure after a cable profile is up (no Pi,
@@ -154,8 +155,12 @@ cable or USB, which find the Pi by its MAC address and need no name.
   `HostKeyAlias=HOST.local`, so no name resolution is needed. The USB path uses the same
   alias, so each Pi has one `known_hosts` entry whichever way it is reached, and step 6 of
   `pi-flash` clears it.
-- The cable interface: the only wired Ethernet device, or `pi_cable_iface` from `/etc/golden/pi.conf`
-  when there are several. The laptop profiles `pi-local` and `pi-shared` are created
+- The cable interface: the only wired Ethernet device not in use on a network, or
+  `pi_cable_iface` from `/etc/golden/pi.conf` when there are several. A port is in use when
+  it is active on a connection other than `pi-local`/`pi-shared` and shows a real network
+  (a `router` neighbour, an IPv6 default or `proto ra` route, or a non-link-local IPv4
+  lease); `pi` never takes such a port over, also not when `pi_cable_iface` names it, and
+  reports the in-use ports it skipped. A port only trying to connect is free. The laptop profiles `pi-local` and `pi-shared` are created
   without an interface and activated on the chosen one (`nmcli con up ... ifname`).
 
 **Away from home** the Pi knows no Wi-Fi network, so the cable (or USB on a Zero 2 W) is the
