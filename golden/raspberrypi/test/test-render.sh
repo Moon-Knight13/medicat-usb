@@ -58,6 +58,16 @@ PY
 PI_HOSTNAME=testpi PI_USER=tester PI_SSH_KEYS="$KEY1" PI_WIFI_SSID=OpenNet render "$T/c"
 python3 -c 'import sys,yaml; n=yaml.safe_load(open(sys.argv[1])); assert n["network"]["wifis"]["wlan0"]["access-points"]=={"OpenNet":{}}' "$T/c/network-config"
 
+# Non-ASCII SSID and password round-trip (emoji is outside the BMP)
+PI_HOSTNAME=testpi PI_USER=tester PI_SSH_KEYS="$KEY1" PI_WIFI_SSID='Café 📶' PI_WIFI_PSK='pässwörd 🔑' render "$T/u"
+python3 - "$T/u/network-config" <<'PY'
+import sys, yaml
+raw = open(sys.argv[1], encoding="utf-8").read()
+assert "Café 📶" in raw, raw
+n = yaml.safe_load(raw)
+assert n["network"]["wifis"]["wlan0"]["access-points"] == {"Café 📶": {"password": "pässwörd 🔑"}}
+PY
+
 # Refusals
 if PI_HOSTNAME=Bad_Name PI_USER=tester PI_SSH_KEYS="$KEY1" render "$T/d" 2>/dev/null; then echo "accepted bad hostname"; exit 1; fi
 if PI_HOSTNAME=testpi PI_USER=tester PI_SSH_KEYS="" render "$T/e" 2>/dev/null; then echo "accepted no keys"; exit 1; fi

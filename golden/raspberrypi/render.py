@@ -20,7 +20,7 @@ NO_WIFI = "# Written by golden/raspberrypi/pi-flash: no Wi-Fi on this Pi.\nnetwo
 
 def q(value):
     """A JSON value is valid YAML, and json.dumps escapes everything that matters."""
-    return json.dumps(value)
+    return json.dumps(value, ensure_ascii=False)
 
 
 def values(env):
@@ -53,7 +53,7 @@ def values(env):
 
 
 def write(path, text, mode):
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.write(text)
     try:
         os.chmod(path, mode)
@@ -67,10 +67,10 @@ def main(argv):
     tdir, out = argv[1], argv[2]
     v = values(os.environ)
     os.makedirs(out, exist_ok=True)
-    with open(os.path.join(tdir, "user-data.tmpl")) as f:
+    with open(os.path.join(tdir, "user-data.tmpl"), encoding="utf-8") as f:
         write(os.path.join(out, "user-data"), Template(f.read()).substitute(v), 0o600)
     if os.environ.get("PI_WIFI_SSID"):
-        with open(os.path.join(tdir, "network-config.tmpl")) as f:
+        with open(os.path.join(tdir, "network-config.tmpl"), encoding="utf-8") as f:
             net = Template(f.read()).substitute(v)
     else:
         net = NO_WIFI
