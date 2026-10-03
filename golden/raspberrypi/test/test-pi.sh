@@ -280,3 +280,10 @@ printf '#!/bin/sh\necho "$*" >> "$NMLOG"\nexit 0\n' > "$T/bin/nmcli"; : > "$NMLO
 if grep -qE "^connection down|^device connect" "$NMLOG"; then echo "pi reset acted with nothing active"; exit 1; fi
 if "$RPI/pi" local --remove >/dev/null 2>&1; then echo "accepted --remove without reset"; exit 1; fi
 if "$RPI/pi" somehost reset >/dev/null 2>&1; then echo "accepted a host with reset"; exit 1; fi
+
+# The README says what the share step checks, and that the network check comes first
+readme=$(tr '\n' ' ' < "$RPI/README.md" | tr -s ' ')
+for want in "Pi is the only device on the cable" "no device on it is flagged as a router" \
+            "no other device in its IPv4 neighbour table" "before \`pi\` takes any port"; do
+    grep -qF "$want" <<<"$readme" || { echo "README does not say: $want"; exit 1; }
+done

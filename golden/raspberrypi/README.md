@@ -38,17 +38,18 @@ network; `pi share` adds internet (and so the right time). A Zero 2 W has no Eth
 port; on boards with a USB device port (Zero 2 W, Pi 4, Pi 5) its USB cable works the same way.
 
 `pi` never takes over an Ethernet port the laptop is using on a network (a router on it, a
-router-advertised or default IPv6 route, or a DHCP lease). It picks the one wired port
-that is free, so a laptop docked on a wired network uses a second USB Ethernet adapter for
-the Pi; with several free ports, set `pi_cable_iface`. After a cable connection the port
-stays held until `pi off`, which hands it back to NetworkManager; when `pi` fails it frees
-the port itself.
+router-advertised or default IPv6 route, or a DHCP lease): this check runs before `pi`
+takes any port, in every mode. It picks the one wired port that is free, so a laptop
+docked on a wired network uses a second USB Ethernet adapter for the Pi; with several free
+ports, set `pi_cable_iface`. After a cable connection the port stays held until `pi off`,
+which hands it back to NetworkManager; when `pi` fails it frees the port itself.
 
-`pi share` refuses to start unless the Pi is the only device on the cable and the cable
-shows no sign of a network (no router, no router-advertised or default route), so the
-laptop never serves addresses on someone else's network. Sharing lasts only for that SSH
-session: when it ends, `pi` takes sharing down and frees the port. It warns when a VPN is
-up, since the Pi's traffic would go through it.
+Once the Pi answers, `pi share` checks again before it serves addresses. It refuses unless
+the Pi is the only device on the cable over IPv6, no device on it is flagged as a router,
+there is no router-advertised or default route, and there is no other device in its IPv4
+neighbour table, so the laptop never serves addresses on someone else's network. Sharing
+lasts only for that SSH session: when it ends, `pi` takes sharing down and frees the port.
+It warns when a VPN is up, since the Pi's traffic would go through it.
 
 At login the Pi warns if it has seen under-voltage since boot: use a stronger supply.
 
