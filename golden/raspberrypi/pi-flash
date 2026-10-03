@@ -1,0 +1,205 @@
+#!/usr/bin/env bash
+# pi-flash — write Raspberry Pi OS Lite to an SD card, set up for this laptop.
+#
+#   pi-flash --name HOST [--no-wifi] [--password] [--device /dev/sdX] [--render-only DIR]
+#
+#   --name HOST        the Pi's hostname (required); reach it later with: pi HOST
+#   --no-wifi          no Wi-Fi on the card at all; reach the Pi by cable or USB only
+#   --password         also set a login password (asked twice); sudo on the Pi then asks for it
+#   --device /dev/sdX  the card, when more than one is plugged in
+#   --render-only DIR  write the first-boot files to DIR with placeholder secrets; no card
+#
+# The Pi gets your user name, your SSH key (plus KEY= lines in /etc/golden/pi.conf) and the
+# Wi-Fi WIFI_SSID from that file, or this laptop's current Wi-Fi. The Wi-Fi password is read
+# from this laptop's saved connection and never printed.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+PI_CONF="${PI_CONF:-/etc/golden/pi.conf}"
+PI_SSH_PUBKEY="${PI_SSH_PUBKEY:-$HOME/.ssh/id_ed25519.pub}"
+CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/golden/raspberrypi"
+MAX_BYTES=256000000000            # 256 GB: bigger "removable" disks are not SD cards
+
+die()      { echo "pi-flash: $1" >&2; exit "${2:-1}"; }
+conf_get() { sed -n "s/^$1=//p" "$PI_CONF" 2>/dev/null | head -n1; }
+conf_all() { sed -n "s/^$1=//p" "$PI_CONF" 2>/dev/null; }
+usage()    { sed -n '2,14s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 1; }
+unescape() { sed 's/\\\(.\)/\1/g'; }    # nmcli -g escapes ':' and '\'
+
+# SD card candidates from "NAME RM SIZE TYPE" lines (lsblk -dnbo NAME,RM,SIZE,TYPE).
+card_candidates() {
+    awk -v max="$MAX_BYTES" '$2 == 1 && $4 == "disk" && $3 > 0 && $3 <= max { print $1 }'
+}
+
+# check_device DEV CANDIDATE...: succeed only if DEV is one of the candidates.
+check_device() {
+    local dev=${1#/dev/} c; shift
+    for c in "$@"; do
+        if [[ "$c" == "$dev" ]]; then return 0; fi
+    done
+    return 1
+}
+
+# UUID of this laptop's saved Wi-Fi connection for SSID; empty if there is none.
+wifi_connection_for() {
+    local uuid type
+    while IFS=: read -r uuid type; do
+        [[ "$type" == 802-11-wireless ]] || continue
+        if [[ "$(nmcli -g 802-11-wireless.ssid connection show uuid "$uuid" | unescape)" == "$1" ]]; then
+            echo "$uuid"; return 0
+        fi
+    done < <(nmcli -t -f UUID,TYPE connection show)
+    return 0
+}
+
+active_wifi_uuid() {
+    nmcli -t -f UUID,TYPE connection show --active | awk -F: '$2 == "802-11-wireless" { print $1; exit }'
+}
+
+collect_values() {
+    PI_USER=$USER
+    [[ -f "$PI_SSH_PUBKEY" ]] || die "no SSH key at $PI_SSH_PUBKEY (make one: ssh-keygen -t ed25519)"
+    PI_SSH_KEYS=$(cat "$PI_SSH_PUBKEY"; conf_all KEY)
+    PI_TIMEZONE=$(timedatectl show -p Timezone --value 2>/dev/null || true)
+    PI_TIMEZONE=${PI_TIMEZONE:-Etc/UTC}
+    PI_WIFI_COUNTRY=$(conf_get WIFI_COUNTRY); PI_WIFI_COUNTRY=${PI_WIFI_COUNTRY:-GB}
+    PI_WIFI_SSID="" PI_WIFI_PSK=""
+    if [[ "$NO_WIFI" == 1 ]]; then return 0; fi
+    PI_WIFI_SSID=$(conf_get WIFI_SSID)
+    if [[ -n "$RENDER_ONLY" ]]; then
+        PI_WIFI_SSID=${PI_WIFI_SSID:-example-wifi}; PI_WIFI_PSK=placeholder-password; return 0
+    fi
+    local uuid mgmt
+    if [[ -n "$PI_WIFI_SSID" ]]; then
+        uuid=$(wifi_connection_for "$PI_WIFI_SSID")
+        [[ -n "$uuid" ]] || die "this laptop has no saved Wi-Fi called \"$PI_WIFI_SSID\"; join it once, or use --no-wifi"
+    else
+        uuid=$(active_wifi_uuid)
+        [[ -n "$uuid" ]] || die "not on Wi-Fi and no WIFI_SSID in $PI_CONF; join a network, or use --no-wifi"
+        PI_WIFI_SSID=$(nmcli -g 802-11-wireless.ssid connection show uuid "$uuid" | unescape)
+    fi
+    mgmt=$(nmcli -g 802-11-wireless-security.key-mgmt connection show uuid "$uuid")
+    case "$mgmt" in
+        "") ;;      # open network
+        wpa-psk|sae)
+            echo "Reading the Wi-Fi password for \"$PI_WIFI_SSID\" (sudo may ask for your password)..."
+            PI_WIFI_PSK=$(sudo nmcli -s -g 802-11-wireless-security.psk connection show uuid "$uuid" | unescape)
+            [[ -n "$PI_WIFI_PSK" ]] || die "no saved Wi-Fi password for \"$PI_WIFI_SSID\"" ;;
+        *) die "\"$PI_WIFI_SSID\" uses $mgmt (enterprise Wi-Fi), which pi-flash does not support; use --no-wifi" ;;
+    esac
+}
+
+ask_password() {
+    local a b
+    read -rsp "Login password for the Pi: " a; echo
+    read -rsp "Same again: " b; echo
+    [[ -n "$a" && "$a" == "$b" ]] || die "passwords empty or different"
+    PI_PASSWORD_HASH=$(printf '%s\n' "$a" | openssl passwd -6 -stdin)
+}
+
+render_to() {
+    PI_HOSTNAME=$NAME PI_USER=$PI_USER PI_TIMEZONE=$PI_TIMEZONE PI_SSH_KEYS=$PI_SSH_KEYS \
+    PI_PASSWORD_HASH=$PI_PASSWORD_HASH PI_WIFI_SSID=$PI_WIFI_SSID PI_WIFI_PSK=$PI_WIFI_PSK \
+    PI_WIFI_COUNTRY=$PI_WIFI_COUNTRY python3 "$HERE/render.py" "$HERE" "$1"
+}
+
+find_image() {
+    local d
+    for d in /media/"$USER"/*/RaspberryPi /run/media/"$USER"/*/RaspberryPi "$HERE/../../isos/RaspberryPi" "$CACHE"; do
+        if [[ -f "$d/$PI_IMAGE_FILE" ]]; then echo "$d/$PI_IMAGE_FILE"; return 0; fi
+    done
+    mkdir -p "$CACHE"
+    echo "Downloading $PI_IMAGE_FILE (about 550 MB)..." >&2
+    curl -fL --retry 3 -C - -o "$CACHE/$PI_IMAGE_FILE" "$PI_IMAGE_URL" >&2 || die "download failed" 2
+    echo "$CACHE/$PI_IMAGE_FILE"
+}
+
+verify_image() {
+    echo "Checking $(basename "$1") (SHA-256)..."
+    local got; got=$(sha256sum "$1" | awk '{print $1}')
+    if [[ "$got" != "$PI_IMAGE_SHA256" ]]; then
+        if [[ "$1" == "$CACHE/"* ]]; then rm -f "$1"; fi
+        die "checksum mismatch for $1" 2
+    fi
+}
+
+choose_card() {
+    local cands ok
+    mapfile -t cands < <(lsblk -dnbo NAME,RM,SIZE,TYPE | card_candidates)
+    if [[ -n "$DEVICE" ]]; then
+        check_device "$DEVICE" "${cands[@]}" || die "$DEVICE is not a removable card of 256 GB or less"
+    else
+        case ${#cands[@]} in
+            0) die "no SD card found (removable, 256 GB or less)" ;;
+            1) DEVICE=${cands[0]} ;;
+            *) die "several cards found (${cands[*]}); choose one with --device /dev/NAME" ;;
+        esac
+    fi
+    DEVICE=/dev/${DEVICE#/dev/}
+    if lsblk -lnpo MOUNTPOINTS "$DEVICE" | grep -qxE '/|/boot|/boot/efi'; then die "$DEVICE holds this laptop's system"; fi
+    echo; lsblk -o NAME,SIZE,MODEL,LABEL "$DEVICE"; echo
+    read -rp "Everything on $DEVICE will be erased. Type yes to continue: " ok
+    [[ "$ok" == yes ]] || die "stopped; nothing was written"
+}
+
+write_card() {
+    local p boot mnt
+    while read -r p; do udisksctl unmount -b "$p" >/dev/null 2>&1 || true; done \
+        < <(lsblk -lnpo NAME,TYPE "$DEVICE" | awk '$2 == "part" { print $1 }')
+    echo "Writing $(basename "$IMAGE") to $DEVICE (sudo may ask for your password)..."
+    xzcat "$IMAGE" | sudo dd of="$DEVICE" bs=4M conv=fsync status=progress || die "writing $DEVICE failed" 2
+    sudo partprobe "$DEVICE"; sudo udevadm settle
+    boot=$(lsblk -lnpo NAME,TYPE "$DEVICE" | awk '$2 == "part" { print $1; exit }')
+    [[ -n "$boot" ]] || die "no boot partition on $DEVICE after writing" 2
+    mnt=$(lsblk -lnpo MOUNTPOINTS "$boot" | head -n1)     # the desktop may have mounted it already
+    if [[ -z "$mnt" ]]; then
+        mnt=$(udisksctl mount -b "$boot" | sed -n 's/^Mounted .* at \(.*\)$/\1/p' | sed 's/\.$//')
+    fi
+    [[ -d "$mnt" ]] || die "could not mount $boot" 2
+    render_to "$mnt" || die "could not write the first-boot files" 2
+    touch "$mnt/ssh"
+    sync; udisksctl unmount -b "$boot" >/dev/null
+}
+
+main() {
+    NAME="" NO_WIFI=0 WANT_PASSWORD=0 DEVICE="" RENDER_ONLY="" PI_PASSWORD_HASH=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --name)        [[ $# -ge 2 ]] || usage; NAME=$2; shift 2 ;;
+            --device)      [[ $# -ge 2 ]] || usage; DEVICE=$2; shift 2 ;;
+            --render-only) [[ $# -ge 2 ]] || usage; RENDER_ONLY=$2; shift 2 ;;
+            --no-wifi)     NO_WIFI=1; shift ;;
+            --password)    WANT_PASSWORD=1; shift ;;
+            *)             usage ;;
+        esac
+    done
+    [[ -n "$NAME" ]] || die "--name HOST is required (the Pi's hostname)"
+    [[ "$NAME" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || die "--name must be a hostname: lower-case letters, digits and -"
+
+    if [[ -n "$RENDER_ONLY" ]]; then
+        collect_values
+        if [[ "$WANT_PASSWORD" == 1 ]]; then PI_PASSWORD_HASH='$6$placeholder$hash'; fi
+        render_to "$RENDER_ONLY"
+        echo "First-boot files written to $RENDER_ONLY"
+        return 0
+    fi
+
+    local cmd
+    for cmd in lsblk udisksctl xzcat python3 curl sha256sum openssl; do
+        command -v "$cmd" >/dev/null 2>&1 || die "missing command: $cmd"
+    done
+    # shellcheck source=image.conf
+    source "$HERE/image.conf"
+    collect_values                                   # Wi-Fi problems stop us before anything is erased
+    if [[ "$WANT_PASSWORD" == 1 ]]; then ask_password; fi
+    IMAGE=$(find_image)
+    verify_image "$IMAGE"
+    choose_card
+    write_card
+    ssh-keygen -R "$NAME.local" >/dev/null 2>&1 || true   # a re-flashed Pi has new host keys
+    echo
+    echo "Done. Put the card in the Pi, power it, and after about 2 minutes: pi $NAME"
+}
+
+if [[ -n "${PI_FLASH_SOURCE_ONLY:-}" ]]; then return 0; fi
+main "$@"
