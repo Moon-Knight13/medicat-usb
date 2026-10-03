@@ -45,6 +45,13 @@ Golden laptop commands   (golden-help shows this list)
     Lid closed on the charger  Keeps running. On battery it goes to sleep
     deck window open           The screen does not dim or lock, the laptop does not sleep
 
+  Raspberry Pi
+    pi-flash --name HOST       Write Raspberry Pi OS to an SD card, set up for this laptop
+                               (--no-wifi: cable/USB only; --password: also a login password)
+    pi [HOST]                  Shell on the Pi: Wi-Fi, else USB, else the Ethernet cable
+    pi [HOST] local | share    Ethernet cable only; share also gives the Pi this laptop's internet
+    pi off                     Free the Ethernet port again
+
   Other useful commands
     mictest                    Live microphone level: talk and watch the bar (Ctrl+C to stop)
     fwupdmgr get-updates       Firmware and BIOS updates waiting (install: sudo fwupdmgr update)
