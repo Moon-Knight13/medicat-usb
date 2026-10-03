@@ -138,14 +138,17 @@ cable or USB, which find the Pi by its MAC address and need no name.
 - No mode: SSH to `HOST.local` if it answers (mDNS answers can be stale, so a name that
   resolves but does not answer falls through); else try USB
   (`10.12.194.1`, the address `rpi-usb-gadget` gives the Pi); else bring up the cable in
-  link-local mode and SSH to the Pi found there.
+  link-local mode and SSH to the Pi found there, saying which paths it tried first.
 - `local`: cable, link-local only. No DHCP server, no routing.
 - `share`: cable, NetworkManager shared mode (DHCP and NAT through the laptop). Refused
-  unless a Raspberry Pi is already seen on the cable, so the laptop never serves DHCP on
-  someone else's network. Prints a warning when the laptop has a VPN up, since the Pi's
+  unless the Pi is the only device on the cable (exactly one link-layer address in the
+  IPv6 neighbour table after the all-nodes ping, with a Raspberry Pi prefix), so the laptop
+  never serves DHCP on someone else's network. Prints a warning when the laptop has a VPN up, since the Pi's
   traffic would then leave through it (for example into a work network).
   Asks the Pi to renew its lease so it gets an address at once.
-- `off`: takes the cable profiles down.
+- `off`: takes the cable profiles down. Any failure after a cable profile is up (no Pi,
+  refused share, lost Pi) takes them down again and says so; before SSH over the cable,
+  `pi` names the profile holding the port and that `pi off` frees it.
 - Finds the Pi on the cable by pinging all IPv6 link-local nodes and matching Raspberry Pi
   MAC prefixes (public vendor prefixes); SSH goes to that link-local address with
   `HostKeyAlias=HOST.local`, so no name resolution is needed. The USB path uses the same

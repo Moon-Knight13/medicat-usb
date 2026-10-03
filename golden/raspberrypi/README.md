@@ -32,8 +32,9 @@ Away from home the Pi knows no Wi-Fi, so use the cable: `pi local` needs no othe
 network; `pi share` adds internet (and so the right time). A Zero 2 W has no Ethernet
 port; on boards with a USB device port (Zero 2 W, Pi 4, Pi 5) its USB cable works the same way.
 
-`pi share` refuses to start unless a Raspberry Pi is on the cable, so the laptop never
-serves addresses on someone else's network. It warns when a VPN is up, since the Pi's
+`pi share` refuses to start unless the Pi is the only device on the cable, so the laptop
+never serves addresses on someone else's network. After a cable connection the
+Ethernet port stays held until `pi off`; when `pi` fails it frees the port itself. It warns when a VPN is up, since the Pi's
 traffic would go through it.
 
 At login the Pi warns if it has seen under-voltage since boot: use a stronger supply.

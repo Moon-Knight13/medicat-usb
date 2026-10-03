@@ -46,10 +46,32 @@ pi_on_cable() {
         $1 ~ /^fe80/ { mac = tolower($3); for (i = 1; i <= n; i++) if (index(mac, o[i]) == 1) { print $1; exit } }' || true
 }
 
+# Succeed only if a Raspberry Pi is the one device answering on the port. The laptop's own
+# addresses are never in its neighbour table; one Pi may show under several addresses.
+only_pi_on_cable() {
+    ping -6 -c2 -W1 "ff02::1%$1" >/dev/null 2>&1 || true
+    ip -6 neigh show dev "$1" | awk -v ouis="$PI_OUIS" '
+        /FAILED|INCOMPLETE/ { next }
+        { for (i = 1; i < NF; i++) if ($i == "lladdr") seen[tolower($(i + 1))] = 1 }
+        END {
+            n = 0; for (m in seen) { n++; mac = m }
+            if (n != 1) exit 1
+            k = split(ouis, o, " "); for (i = 1; i <= k; i++) if (index(mac, o[i]) == 1) exit 0
+            exit 1
+        }'
+}
+
+# Free the cable port again, then stop with MESSAGE.
+cable_fail() {
+    nmcli connection down pi-shared >/dev/null 2>&1 || true
+    nmcli connection down pi-local >/dev/null 2>&1 || true
+    die "$*; Ethernet port ${IFACE:-} released"
+}
+
 # Bring PROFILE up on the cable port and wait up to 30 s for a Pi. Sets IFACE and ADDR.
 cable_up() {
     IFACE=$(cable_iface)
-    nmcli -w 15 connection up "$1" ifname "$IFACE" >/dev/null || die "could not bring up $1 on $IFACE"
+    nmcli -w 15 connection up "$1" ifname "$IFACE" >/dev/null || cable_fail "could not bring up $1 on $IFACE"
     echo "Ethernet $IFACE up ($1), looking for the Pi..."
     local i
     for i in $(seq 1 30); do
@@ -57,7 +79,7 @@ cable_up() {
         if [[ -n "$ADDR" ]]; then return 0; fi
         sleep 1
     done
-    die "no Raspberry Pi seen on $IFACE after 30 seconds"
+    cable_fail "no Raspberry Pi seen on $IFACE after 30 seconds"
 }
 
 ssh_opts() { if [[ -n "$HOST" ]]; then printf '%s\n' -o "HostKeyAlias=$HOST.local"; fi; }
@@ -65,6 +87,12 @@ ssh_opts() { if [[ -n "$HOST" ]]; then printf '%s\n' -o "HostKeyAlias=$HOST.loca
 ssh_pi() {
     local opts; mapfile -t opts < <(ssh_opts)
     exec ssh "${opts[@]}" "$USER@$1"
+}
+
+# ssh to the Pi on the cable, which PROFILE holds.
+ssh_cable() {
+    echo "Ethernet port $IFACE held by $1; 'pi off' frees it."
+    ssh_pi "$ADDR%$IFACE"
 }
 
 vpn_up() { nmcli -t -f TYPE connection show --active | grep -E '^(vpn|wireguard|tun)$' >/dev/null 2>&1; }
@@ -88,11 +116,12 @@ main() {
             echo "Ethernet port released" ;;
         local)
             cable_up pi-local
-            ssh_pi "$ADDR%$IFACE" ;;
+            ssh_cable pi-local ;;
         share)
-            cable_up pi-local        # a Pi must be on this cable before we serve DHCP on it
+            cable_up pi-local        # only a Pi may be on this cable before we serve DHCP on it
+            only_pi_on_cable "$IFACE" || cable_fail "other devices on this cable; is it plugged into a network? use: pi local"
             if vpn_up; then echo "Warning: a VPN is up; the Pi's internet traffic will go through it." >&2; fi
-            nmcli -w 15 connection up pi-shared ifname "$IFACE" >/dev/null || die "could not share on $IFACE"
+            nmcli -w 15 connection up pi-shared ifname "$IFACE" >/dev/null || cable_fail "could not share on $IFACE"
             echo "Sharing this laptop's connection with the Pi"
             local opts i; mapfile -t opts < <(ssh_opts)
             # Ask the Pi for a DHCP lease now rather than at its next retry; its link drops briefly.
@@ -102,13 +131,19 @@ main() {
                 sleep 1; ADDR=$(pi_on_cable "$IFACE")
                 if [[ -n "$ADDR" ]]; then break; fi
             done
-            [[ -n "$ADDR" ]] || die "lost the Pi after turning on sharing"
-            ssh_pi "$ADDR%$IFACE" ;;
+            [[ -n "$ADDR" ]] || cable_fail "lost the Pi after turning on sharing"
+            ssh_cable pi-shared ;;
         "")
-            if [[ -n "$HOST" ]] && ping -c1 -W1 "$HOST.local" >/dev/null 2>&1; then ssh_pi "$HOST.local"; fi
+            if [[ -n "$HOST" ]]; then
+                if ping -c1 -W1 "$HOST.local" >/dev/null 2>&1; then ssh_pi "$HOST.local"; fi
+                echo "No answer from $HOST.local (Wi-Fi)."
+            else
+                echo "No host given and no DEFAULT_HOST: Wi-Fi skipped."
+            fi
             if ping -c1 -W1 "$USB_ADDR" >/dev/null 2>&1; then ssh_pi "$USB_ADDR"; fi
+            echo "No answer from $USB_ADDR (USB). Trying the Ethernet cable."
             cable_up pi-local
-            ssh_pi "$ADDR%$IFACE" ;;
+            ssh_cable pi-local ;;
     esac
 }
 
