@@ -42,3 +42,16 @@ if (cable_iface) 2>/dev/null; then echo "guessed between two ports"; exit 1; fi
 # Unknown arguments: usage, exit 1
 if "$RPI/pi" --bogus >/dev/null 2>&1; then echo "accepted --bogus"; exit 1; fi
 if "$RPI/pi" one two >/dev/null 2>&1; then echo "accepted two hosts"; exit 1; fi
+
+# Missing PI_CONF is tolerated: cable_iface works and conf_get returns empty
+export PI_CONF="$T/nonexistent.conf"
+# Reset to single port for this test: remove eth9 setup
+rm -rf "$T/sys/eth9"
+cat > "$T/bin/nmcli" <<'EOF'
+#!/bin/sh
+[ "$*" = "-t -f DEVICE,TYPE device" ] && printf '%s\n' "wlp1s0:wifi" "enxdock:ethernet" "enxusb:ethernet" "veth0:ethernet" "docker0:bridge"
+exit 0
+EOF
+[[ "$(cable_iface)" == enxdock ]] || { echo "cable_iface with missing conf returned: $(cable_iface)"; exit 1; }
+result=$(conf_get DEFAULT_HOST); [[ $? -eq 0 ]] || { echo "conf_get failed with missing file"; exit 1; }
+[[ -z "$result" ]] || { echo "conf_get DEFAULT_HOST returned: '$result'"; exit 1; }

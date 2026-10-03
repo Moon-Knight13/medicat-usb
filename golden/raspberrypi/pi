@@ -16,7 +16,7 @@ PI_OUIS="b8:27:eb dc:a6:32 e4:5f:01 d8:3a:dd 28:cd:c1 2c:cf:67 88:a2:9e"   # Ras
 USB_ADDR=10.12.194.1                                                       # the Pi on USB (rpi-usb-gadget)
 
 die()      { echo "pi: $*" >&2; exit 1; }
-conf_get() { sed -n "s/^$1=//p" "$PI_CONF" 2>/dev/null | head -n1; }
+conf_get() { sed -n "s/^$1=//p" "$PI_CONF" 2>/dev/null | head -n1 || true; }
 usage()    { sed -n '2,10s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 1; }
 
 # The Ethernet port the Pi is plugged into: CABLE_IFACE, or the only physical wired port.
@@ -41,9 +41,9 @@ cable_iface() {
 # Link-local IPv6 address of a Raspberry Pi on the port; empty if none answers.
 pi_on_cable() {
     ping -6 -c2 -W1 "ff02::1%$1" >/dev/null 2>&1 || true
-    ip -6 neigh show dev "$1" | awk -v ouis="$PI_OUIS" '
+    ip -6 neigh show dev "$1" 2>/dev/null | awk -v ouis="$PI_OUIS" '
         BEGIN { n = split(ouis, o, " ") }
-        $1 ~ /^fe80/ { mac = tolower($3); for (i = 1; i <= n; i++) if (index(mac, o[i]) == 1) { print $1; exit } }'
+        $1 ~ /^fe80/ { mac = tolower($3); for (i = 1; i <= n; i++) if (index(mac, o[i]) == 1) { print $1; exit } }' || true
 }
 
 # Bring PROFILE up on the cable port and wait up to 30 s for a Pi. Sets IFACE and ADDR.
@@ -67,7 +67,7 @@ ssh_pi() {
     exec ssh "${opts[@]}" "$USER@$1"
 }
 
-vpn_up() { nmcli -t -f TYPE connection show --active | grep -qE '^(vpn|wireguard|tun)$'; }
+vpn_up() { nmcli -t -f TYPE connection show --active | grep -E '^(vpn|wireguard|tun)$' >/dev/null 2>&1; }
 
 main() {
     HOST="" MODE=""

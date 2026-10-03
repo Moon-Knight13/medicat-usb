@@ -57,3 +57,14 @@ PATH="$T/bin:$PATH"
 [[ "$(wifi_connection_for 'Home: Net')" == u1 ]] || { echo "wifi_connection_for failed"; exit 1; }
 [[ -z "$(wifi_connection_for 'Nowhere')" ]] || { echo "found a network that does not exist"; exit 1; }
 [[ "$(active_wifi_uuid)" == u3 ]] || { echo "active_wifi_uuid failed"; exit 1; }
+
+# Missing PI_CONF is tolerated: pi-flash succeeds and produces valid user-data with exactly 1 SSH key
+export PI_CONF="$T/nonexistent.conf"
+"$RPI/pi-flash" --name testpi --no-wifi --render-only "$T/m" >/dev/null
+python3 - "$T/m" <<'PY'
+import sys, yaml
+d = sys.argv[1]
+ud = yaml.safe_load(open(f"{d}/user-data"))
+assert ud["hostname"] == "testpi"
+assert len(ud["users"][0]["ssh_authorized_keys"]) == 1, f"Expected 1 key, got {len(ud['users'][0]['ssh_authorized_keys'])}"
+PY

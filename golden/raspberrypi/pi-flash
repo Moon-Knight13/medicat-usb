@@ -21,8 +21,8 @@ CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/golden/raspberrypi"
 MAX_BYTES=256000000000            # 256 GB: bigger "removable" disks are not SD cards
 
 die()      { echo "pi-flash: $1" >&2; exit "${2:-1}"; }
-conf_get() { sed -n "s/^$1=//p" "$PI_CONF" 2>/dev/null | head -n1; }
-conf_all() { sed -n "s/^$1=//p" "$PI_CONF" 2>/dev/null; }
+conf_get() { sed -n "s/^$1=//p" "$PI_CONF" 2>/dev/null | head -n1 || true; }
+conf_all() { sed -n "s/^$1=//p" "$PI_CONF" 2>/dev/null || true; }
 usage()    { sed -n '2,14s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 1; }
 unescape() { sed 's/\\\(.\)/\1/g'; }    # nmcli -g escapes ':' and '\'
 
