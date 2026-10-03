@@ -34,8 +34,14 @@ for line in ("link-local=enabled", "route-metric=700", "dhcp-timeout=2147483647"
 assert eth["permissions"] == "0600"
 power = [f for f in ud["write_files"] if f["path"].endswith("golden-power.sh")][0]["content"]
 assert "$(vcgencmd get_throttled" in power          # $$ in the template became $
-usb = ud["runcmd"][-1][2]
-assert "rpi-usb-gadget on" in usb and '"Pi 4 Model"' in usb and "Pi 3" not in usb
+usb = [c[2] for c in ud["runcmd"] if isinstance(c, list) and "rpi-usb-gadget" in c[-1]][0]
+assert "rpi-usb-gadget on && touch /run/golden-reboot" in usb and '"Pi 4 Model"' in usb and "Pi 3" not in usb
+assert "systemctl reboot" not in raw and "reboot" not in str(ud["runcmd"]).replace("golden-reboot", "")
+ps = ud["power_state"]
+assert ps["mode"] == "reboot" and ps["condition"] == "test -e /run/golden-reboot", ps
+cleanup = ud["runcmd"][-1][2]                       # last step: Wi-Fi password off the card
+assert "/boot/firmware/network-config" in cleanup and "wifis" in cleanup, cleanup
+assert "# Wi-Fi applied on first boot and removed from this card by golden/raspberrypi." in cleanup
 w = nc["network"]["wifis"]["wlan0"]
 assert nc["network"]["renderer"] == "NetworkManager"
 assert w["access-points"] == {'Net: "x"': {"password": psk}}, w["access-points"]

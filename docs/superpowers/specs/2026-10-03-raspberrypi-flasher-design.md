@@ -113,13 +113,18 @@ Exit codes: 0 done, 1 user error or refused safety check, 2 checksum or write fa
 - a login message (`/etc/profile.d/`) that warns when `vcgencmd get_throttled` is not `0x0`:
   the Pi has seen under-voltage since boot, a cause of SD card corruption;
 - USB networking, only when `/proc/device-tree/model` names a Zero 2 W, Pi 4 or Pi 5:
-  run `rpi-usb-gadget on` and reboot once. Other boards skip this step.
+  run `rpi-usb-gadget on` and reboot once, through cloud-init's `power_state` after it has
+  finished. Other boards skip this step;
+- last, overwrite `network-config` on the boot partition with a one-line comment when it
+  holds Wi-Fi, so the password does not stay on the card.
 
 `network-config.tmpl` is netplan v2 with the NetworkManager renderer: one Wi-Fi network,
 DHCP, the regulatory domain. The password is YAML-escaped. The boot partition is FAT, so
-the file is readable by anyone holding the card until first boot; cloud-init then moves the
-network into NetworkManager's root-only store. Treat a flashed but unused card as holding
-the Wi-Fi password.
+the file is readable by anyone holding the card until first boot. cloud-init does not delete
+its seed: it applies the network to root-only files on the Pi, and the last first-boot step
+then overwrites `network-config` with a comment. Treat a flashed but unused card as holding
+the Wi-Fi password. `user-data` stays on the card but holds no Wi-Fi password, only the
+login password's hash when `--password` was given.
 
 ## pi (laptop)
 
@@ -207,7 +212,8 @@ the first boot spend time on security updates.
 
 - **Passwordless sudo with key-only login.** Whoever holds a listed SSH private key has
   root on the Pi. Reasonable for home devices; `--password` makes sudo ask for a password.
-- **Wi-Fi password readable on an unused card** (FAT boot partition, see First boot).
+- **Wi-Fi password readable on the card until the Pi's first boot**, which removes it (FAT
+  boot partition, see First boot).
 - **Wrong clock offline.** A Pi has no clock battery; on `pi local` with no internet its
   time is wrong until `pi share` or Wi-Fi gives it NTP. Revisit in the sheep-dip design.
 - **Image age.** A pinned image is only as current as its last bump; unattended-upgrades

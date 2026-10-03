@@ -48,9 +48,22 @@ runcmd:
 - [systemctl, enable, --now, ssh]
 - [nmcli, connection, reload]
 # USB networking only on boards with a device-mode USB port; never on a Pi 3 B+.
+# power_state reboots once cloud-init has finished, not halfway through this stage.
 - - sh
   - -c
   - |
     case "$$(tr -d '\0' </proc/device-tree/model)" in
-        *"Zero 2 W"*|*"Pi 4 Model"*|*"Pi 5 Model"*) rpi-usb-gadget on && systemctl reboot ;;
+        *"Zero 2 W"*|*"Pi 4 Model"*|*"Pi 5 Model"*) rpi-usb-gadget on && touch /run/golden-reboot ;;
     esac
+# cloud-init has applied the Wi-Fi to root-only files; take the password off the FAT boot partition.
+- - sh
+  - -c
+  - |
+    f=/boot/firmware/network-config
+    if grep -q wifis "$$f" 2>/dev/null; then
+        echo "# Wi-Fi applied on first boot and removed from this card by golden/raspberrypi." >"$$f" && sync
+    fi
+power_state:
+  mode: reboot
+  condition: test -e /run/golden-reboot
+  message: USB networking turned on; rebooting once

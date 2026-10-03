@@ -18,7 +18,8 @@ Boards: Pi 3 B+, Pi 4, Pi 5, Zero 2 W (Raspberry Pi OS Lite, 64-bit).
 - `--no-wifi`: no Wi-Fi on the card; reach the Pi by cable (or USB on a Zero 2 W).
 - `--password`: also a login password. Without it the Pi accepts SSH keys only and sudo
   asks for no password.
-- Until the Pi's first boot, the card holds the Wi-Fi password in readable form.
+- The card holds the Wi-Fi password in readable form until the Pi's first boot, which
+  removes it from the card. With `--password` the card holds only a hash of the login password.
 
 ## Connect
 
