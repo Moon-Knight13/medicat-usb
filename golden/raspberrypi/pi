@@ -60,19 +60,26 @@ pi_on_cable() {
         $1 ~ /^fe80/ { mac = tolower($3); for (i = 1; i <= n; i++) if (index(mac, o[i]) == 1) { print $1; exit } }' || true
 }
 
-# Succeed only if a Raspberry Pi is the one device answering on the port. The laptop's own
-# addresses are never in its neighbour table; one Pi may show under several addresses.
+# Succeed only if a Raspberry Pi is the one device answering on the port, over IPv6 and in
+# the IPv4 neighbour table. The laptop's own addresses are never in its neighbour tables;
+# one Pi may show under several addresses.
 only_pi_on_cable() {
+    local mac out
     ping -6 -c2 -W1 "ff02::1%$1" >/dev/null 2>&1 || true
-    ip -6 neigh show dev "$1" | awk -v ouis="$PI_OUIS" '
+    mac=$(ip -6 neigh show dev "$1" | awk -v ouis="$PI_OUIS" '
         /FAILED|INCOMPLETE/ { next }
         { for (i = 1; i < NF; i++) if ($i == "lladdr") seen[tolower($(i + 1))] = 1 }
         END {
             n = 0; for (m in seen) { n++; mac = m }
             if (n != 1) exit 1
-            k = split(ouis, o, " "); for (i = 1; i <= k; i++) if (index(mac, o[i]) == 1) exit 0
+            k = split(ouis, o, " "); for (i = 1; i <= k; i++) if (index(mac, o[i]) == 1) { print mac; exit 0 }
             exit 1
-        }'
+        }') || return 1
+    out=$(ip -4 neigh show dev "$1") || return 1
+    awk -v pi="$mac" '
+        /FAILED|INCOMPLETE/ { next }
+        { for (i = 1; i < NF; i++) if ($i == "lladdr" && tolower($(i + 1)) != pi) other = 1 }
+        END { exit other }' <<<"$out"
 }
 
 # Fail if the port shows a real network: a neighbour flagged as router, an IPv6 default or

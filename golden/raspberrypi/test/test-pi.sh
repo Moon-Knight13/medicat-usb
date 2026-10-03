@@ -63,13 +63,14 @@ cat > "$T/bin/ip" <<'EOC'
 for dev; do :; done                     # per-port file if there is one, else the shared one
 case "$*" in
   "-6 neigh show dev "*) f=neigh ;;
+  "-4 neigh show dev "*) f=neigh4 ;;
   "-6 route show dev "*) f=routes ;;
   "-4 -o addr show dev "*) f=addrs ;;
   *) echo "ip: unexpected $*" >&2; exit 1 ;;
 esac
 if [ -e "$T/$f.$dev" ]; then cat "$T/$f.$dev"; else cat "$T/$f"; fi
 EOC
-chmod +x "$T/bin/ip"; export T; : > "$T/routes"; : > "$T/addrs"
+chmod +x "$T/bin/ip"; export T; : > "$T/routes"; : > "$T/addrs"; : > "$T/neigh4"
 only_pi_on_cable enxdock || { echo "refused a lone Pi"; exit 1; }
 printf '%s\n' "fe80::2 lladdr b8:27:eb:aa:bb:cc REACHABLE" "2001:db8::2 lladdr B8:27:EB:AA:BB:CC STALE" > "$T/neigh"
 only_pi_on_cable enxdock || { echo "counted one Pi twice"; exit 1; }
@@ -77,6 +78,15 @@ printf '%s\n' "fe80::1 lladdr 00:11:22:33:44:55 REACHABLE" "fe80::2 lladdr b8:27
 if only_pi_on_cable enxdock; then echo "allowed sharing with another device on the cable"; exit 1; fi
 printf '%s\n' "fe80::1 lladdr 00:11:22:33:44:55 REACHABLE" > "$T/neigh"
 if only_pi_on_cable enxdock; then echo "allowed sharing with no Pi"; exit 1; fi
+# IPv4 neighbours count too: a device that only speaks IPv4 is not the Pi
+printf '%s\n' "fe80::2 lladdr b8:27:eb:aa:bb:cc REACHABLE" > "$T/neigh"
+printf '%s\n' "169.254.7.8 lladdr B8:27:EB:AA:BB:CC REACHABLE" "192.0.2.9 FAILED" "192.0.2.8 INCOMPLETE" > "$T/neigh4"
+only_pi_on_cable enxdock || { echo "refused a lone Pi seen on IPv4 too"; exit 1; }
+printf '%s\n' "169.254.7.8 lladdr b8:27:eb:aa:bb:cc REACHABLE" "192.0.2.1 lladdr 00:11:22:33:44:55 STALE" > "$T/neigh4"
+if only_pi_on_cable enxdock; then echo "allowed sharing beside an IPv4-only device"; exit 1; fi
+: > "$T/neigh4"; mv "$T/neigh4" "$T/neigh4.off"
+if only_pi_on_cable enxdock 2>/dev/null; then echo "allowed sharing when ip -4 neigh failed"; exit 1; fi
+mv "$T/neigh4.off" "$T/neigh4"
 
 # Signs of a real network on the port: a router neighbour, an RA or default route, a lease
 printf '#!/bin/sh\n[ "$*" = "-g GENERAL.CONNECTION device show enxdock" ] && cat "$T/conn.enxdock" 2>/dev/null\nexit 0\n' > "$T/bin/nmcli"
@@ -154,6 +164,15 @@ set +e; "$RPI/pi" share > "$T/out" 2>&1; rc=$?; set -e
 [[ $rc == 7 ]] || { echo "pi share exited $rc, not ssh's 7"; cat "$T/out"; exit 1; }
 grep -qx "connection down pi-shared" "$NMLOG" || { echo "pi-shared left up after a failed session"; exit 1; }
 printf '#!/bin/sh\necho "$*" >> "$NMLOG"\nexit 0\n' > "$T/bin/ssh"
+
+# pi share with the Pi alone on IPv6 but another device on IPv4: refused
+printf '%s\n' "fe80::2 lladdr b8:27:eb:aa:bb:cc REACHABLE" > "$T/neigh"
+echo "192.0.2.1 lladdr 00:11:22:33:44:55 REACHABLE" > "$T/neigh4"; : > "$NMLOG"
+if "$RPI/pi" share > "$T/out" 2>&1; then echo "pi share succeeded beside an IPv4-only device"; exit 1; fi
+grep -q "other devices on this cable; is it plugged into a network? use: pi local" "$T/out" || { cat "$T/out"; exit 1; }
+if grep -q "connection up pi-shared" "$NMLOG"; then echo "pi-shared brought up beside an IPv4-only device"; exit 1; fi
+released || { echo "IPv4 refusal left the port held"; exit 1; }
+: > "$T/neigh4"
 
 # pi share where the one neighbour is a router: refused like any network
 printf '%s\n' "fe80::2 lladdr b8:27:eb:aa:bb:cc router REACHABLE" > "$T/neigh"; : > "$NMLOG"
