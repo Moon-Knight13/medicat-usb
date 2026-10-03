@@ -38,8 +38,7 @@ To change a Pi, re-flash it. Nothing on a Pi is patched in place.
 ```
 golden/raspberrypi/
   README.md             how to flash and connect
-  image.conf            pinned image: URL, file name, SHA-256, signing-key fingerprint
-  raspberrypi-signing-key.asc  Raspberry Pi's public image-signing key
+  image.conf            pinned image: URL, file name, SHA-256
   user-data.tmpl        cloud-init user-data template
   network-config.tmpl   cloud-init network-config template (Wi-Fi)
   pi-flash              write and configure an SD card
@@ -59,20 +58,17 @@ The image goes in `isos/RaspberryPi/`, which `build` copies to the stick as it d
 ## pi-flash
 
 ```
-pi-flash --name HOST [--no-wifi] [--password] [--test] [--device /dev/sdX] [--render-only DIR]
+pi-flash --name HOST [--no-wifi] [--password] [--device /dev/sdX] [--render-only DIR]
 ```
 
 1. **Find the card.** Removable block devices only, at most 256 GB, not mounted as `/`
    or `/boot`. With one candidate it is pre-selected; with several, or with `--device`,
    the user picks. Model, size and current partition labels are shown and the user types
-   `yes` to continue. With `--test`, run `f3probe` on the card first (fake capacity and bad
-   flash), as `make-stick.sh` does for sticks.
+   `yes` to continue.
 2. **Find the image**, first match wins: a mounted MediCat stick (`*/RaspberryPi/<file>`),
    the kit's `isos/RaspberryPi/`, `~/.cache/golden/raspberrypi/`. If none, download to the
-   cache. Before writing, every time: the SHA-256 from `image.conf`, and the image's detached
-   GPG signature (`.sig`, kept next to the image) against Raspberry Pi's public signing key,
-   which is committed as `golden/raspberrypi/raspberrypi-signing-key.asc` with its fingerprint
-   pinned in `image.conf`.
+   cache. The SHA-256 pinned in `image.conf` is checked every time before writing. The pin
+   changes only through a reviewed PR, which is what makes the image trustworthy.
 3. **Collect values** (never printed):
    - user name: the laptop user (`$USER`);
    - SSH public keys: `~/.ssh/id_ed25519.pub` (fail with a clear message if missing), plus
@@ -100,7 +96,7 @@ pi-flash --name HOST [--no-wifi] [--password] [--test] [--device /dev/sdX] [--re
 `--render-only DIR` does steps 3 and 5 into `DIR` with placeholder secrets and no device,
 for tests and review.
 
-Exit codes: 0 done, 1 user error or refused safety check, 2 checksum, signature or write failure.
+Exit codes: 0 done, 1 user error or refused safety check, 2 checksum or write failure.
 
 ## First boot (cloud-init)
 
@@ -114,6 +110,8 @@ Exit codes: 0 done, 1 user error or refused safety check, 2 checksum, signature 
 - `unattended-upgrades` for security updates;
 - the Pi end of the direct cable: a NetworkManager profile `eth-direct` on `eth0` with
   DHCP (no timeout) plus IPv4 link-local, route metric 700 so Wi-Fi stays the default route;
+- a login message (`/etc/profile.d/`) that warns when `vcgencmd get_throttled` is not `0x0`:
+  the Pi has seen under-voltage since boot, a cause of SD card corruption;
 - USB networking, only when `/proc/device-tree/model` names a Zero 2 W, Pi 4 or Pi 5:
   run `rpi-usb-gadget on` and reboot once. Other boards skip this step.
 
@@ -129,9 +127,8 @@ the Wi-Fi password.
 pi [HOST] [local|share|off]
 ```
 
-`HOST` defaults to `pi_default_host` from `/etc/golden/pi.conf`. With no default, Wi-Fi is
-skipped and `pi` connects to the one Pi it finds on USB or the cable; if it finds none or
-several, it stops and asks for a name.
+`HOST` defaults to `pi_default_host` from `/etc/golden/pi.conf`. With neither, `pi` uses the
+cable or USB, which find the Pi by its MAC address and need no name.
 
 - No mode: SSH to `HOST.local` if it answers (mDNS answers can be stale, so a name that
   resolves but does not answer falls through); else try USB
@@ -140,8 +137,8 @@ several, it stops and asks for a name.
 - `local`: cable, link-local only. No DHCP server, no routing.
 - `share`: cable, NetworkManager shared mode (DHCP and NAT through the laptop). Refused
   unless a Raspberry Pi is already seen on the cable, so the laptop never serves DHCP on
-  someone else's network. Also refused while the laptop has a VPN up (the Pi's traffic
-  would leave through it, for example into a work network) unless `--force` is given.
+  someone else's network. Prints a warning when the laptop has a VPN up, since the Pi's
+  traffic would then leave through it (for example into a work network).
   Asks the Pi to renew its lease so it gets an address at once.
 - `off`: takes the cable profiles down.
 - Finds the Pi on the cable by pinging all IPv6 link-local nodes and matching Raspberry Pi
@@ -149,16 +146,14 @@ several, it stops and asks for a name.
   `HostKeyAlias=HOST.local`, so no name resolution is needed. The USB path uses the same
   alias, so each Pi has one `known_hosts` entry whichever way it is reached, and step 6 of
   `pi-flash` clears it.
-- On every connection, before the shell opens, one short SSH call:
-  - **clock**: if the Pi reports its clock as not synchronised and it is more than 60 seconds
-    off the laptop's, set it from the laptop (`sudo date -s @<epoch>`). A Pi has no clock
-    battery, so offline it starts with a wrong time, which breaks TLS and apt. On a Pi
-    flashed with `--password`, sudo would ask, so `pi` prints the command instead of running it;
-  - **power**: if `vcgencmd get_throttled` is not `0x0`, print a one-line warning that the
-    Pi has seen under-voltage since boot (a cause of SD card corruption).
 - The cable interface: the only wired Ethernet device, or `pi_cable_iface` from `/etc/golden/pi.conf`
   when there are several. The laptop profiles `pi-local` and `pi-shared` are created
   without an interface and activated on the chosen one (`nmcli con up ... ifname`).
+
+**Away from home** the Pi knows no Wi-Fi network, so the cable (or USB on a Zero 2 W) is the
+way in: `pi local` works with no other network present, `pi share` adds internet through
+the laptop (which also lets the Pi set its clock). Extra Wi-Fi networks for the Pi (a phone
+hotspot) and a Pi-hosted fallback hotspot are left out for now.
 
 Both profiles have autoconnect off. While one is up, that Ethernet port cannot join a
 normal wired network; `pi off` releases it.
@@ -182,17 +177,15 @@ normal wired network; `pi off` releases it.
 ## Stick
 
 `make-stick.sh update` reads `golden/raspberrypi/image.conf`, downloads the image to
-`isos/RaspberryPi/` with its `.sig` when missing, verifies SHA-256 and signature and writes
-the usual `.ok` marker. `status` lists it and its release date. Moving to a newer image is a
+`isos/RaspberryPi/` when missing, verifies its SHA-256 and writes the usual `.ok` marker. `status` lists it and its release date. Moving to a newer image is a
 reviewed PR that changes `image.conf`; aim for every few months, since an old image makes
 the first boot spend time on security updates.
 
 ## Error handling
 
 - Every safety check fails closed with a one-line reason: not removable, too large,
-  mounted as system disk, checksum or signature mismatch, card failed `f3probe`, no SSH key,
-  no Wi-Fi password found for a secured network, enterprise Wi-Fi, missing `--name`,
-  `pi share` with a VPN up.
+  mounted as system disk, checksum mismatch, no SSH key,
+  no Wi-Fi password found for a secured network, enterprise Wi-Fi, missing `--name`.
 - Interrupted writes leave a card that will not boot cleanly; re-running `pi-flash` is the fix.
 - `pi` prints which path it tried and why it gave up (not plugged in, no Pi seen on the
   cable after 30 seconds).
@@ -206,8 +199,8 @@ the first boot spend time on security updates.
 - `test/render.sh` also covers `--no-wifi` (no `network-config` Wi-Fi block, no Wi-Fi
   values anywhere on the card) and several `pi_authorized_keys`.
 - Manual: flash the Pi 3 B+, check Wi-Fi, `pi`, `pi local`, `pi share`, USB step skipped,
-  re-flash and reconnect with no host-key error, clock set after an offline boot, `pi share`
-  refused with a VPN up. Flash a Zero 2 W when available and check `pi` over USB.
+  re-flash and reconnect with no host-key error, under-voltage message at login on a weak
+  supply. Flash a Zero 2 W when available and check `pi` over USB.
 - Privacy grep of the diff, commit messages and PR body before every push.
 
 ## Accepted risks
@@ -215,6 +208,8 @@ the first boot spend time on security updates.
 - **Passwordless sudo with key-only login.** Whoever holds a listed SSH private key has
   root on the Pi. Reasonable for home devices; `--password` makes sudo ask for a password.
 - **Wi-Fi password readable on an unused card** (FAT boot partition, see First boot).
+- **Wrong clock offline.** A Pi has no clock battery; on `pi local` with no internet its
+  time is wrong until `pi share` or Wi-Fi gives it NTP. Revisit in the sheep-dip design.
 - **Image age.** A pinned image is only as current as its last bump; unattended-upgrades
   closes the gap after first boot.
 
