@@ -38,7 +38,8 @@ To change a Pi, re-flash it. Nothing on a Pi is patched in place.
 ```
 golden/raspberrypi/
   README.md             how to flash and connect
-  image.conf            pinned image: URL, file name, SHA-256
+  image.conf            pinned image: URL, file name, SHA-256, signing-key fingerprint
+  raspberrypi-signing-key.asc  Raspberry Pi's public image-signing key
   user-data.tmpl        cloud-init user-data template
   network-config.tmpl   cloud-init network-config template (Wi-Fi)
   pi-flash              write and configure an SD card
@@ -99,7 +100,7 @@ pi-flash --name HOST [--no-wifi] [--password] [--test] [--device /dev/sdX] [--re
 `--render-only DIR` does steps 3 and 5 into `DIR` with placeholder secrets and no device,
 for tests and review.
 
-Exit codes: 0 done, 1 user error or refused safety check, 2 checksum or write failure.
+Exit codes: 0 done, 1 user error or refused safety check, 2 checksum, signature or write failure.
 
 ## First boot (cloud-init)
 
@@ -128,6 +129,10 @@ the Wi-Fi password.
 pi [HOST] [local|share|off]
 ```
 
+`HOST` defaults to `pi_default_host` from `/etc/golden/pi.conf`. With no default, Wi-Fi is
+skipped and `pi` connects to the one Pi it finds on USB or the cable; if it finds none or
+several, it stops and asks for a name.
+
 - No mode: SSH to `HOST.local` if it answers (mDNS answers can be stale, so a name that
   resolves but does not answer falls through); else try USB
   (`10.12.194.1`, the address `rpi-usb-gadget` gives the Pi); else bring up the cable in
@@ -141,11 +146,14 @@ pi [HOST] [local|share|off]
 - `off`: takes the cable profiles down.
 - Finds the Pi on the cable by pinging all IPv6 link-local nodes and matching Raspberry Pi
   MAC prefixes (public vendor prefixes); SSH goes to that link-local address with
-  `HostKeyAlias=HOST.local`, so no name resolution is needed.
+  `HostKeyAlias=HOST.local`, so no name resolution is needed. The USB path uses the same
+  alias, so each Pi has one `known_hosts` entry whichever way it is reached, and step 6 of
+  `pi-flash` clears it.
 - On every connection, before the shell opens, one short SSH call:
   - **clock**: if the Pi reports its clock as not synchronised and it is more than 60 seconds
     off the laptop's, set it from the laptop (`sudo date -s @<epoch>`). A Pi has no clock
-    battery, so offline it starts with a wrong time, which breaks TLS and apt;
+    battery, so offline it starts with a wrong time, which breaks TLS and apt. On a Pi
+    flashed with `--password`, sudo would ask, so `pi` prints the command instead of running it;
   - **power**: if `vcgencmd get_throttled` is not `0x0`, print a one-line warning that the
     Pi has seen under-voltage since boot (a cause of SD card corruption).
 - The cable interface: the only wired Ethernet device, or `pi_cable_iface` from `/etc/golden/pi.conf`
@@ -162,15 +170,14 @@ normal wired network; `pi off` releases it.
 - copy `pi-flash` and `pi` to `/usr/local/bin` (mode 0755);
 - create `pi-local` (link-local) and `pi-shared` (shared) with
   `community.general.nmcli` or `nmcli` commands, autoconnect off, no interface;
-- write `/etc/golden/pi.conf` from `local.yml` values (`pi_wifi_ssid`, `pi_wifi_country`,
-  `pi_cable_iface`, `pi_authorized_keys`); `pi-flash` and `pi` read only this file, so neither needs Ansible or
-  the stick at run time;
+- write `/etc/golden/pi.conf` from `local.yml` values (`pi_default_host`, `pi_wifi_ssid`,
+  `pi_wifi_country`, `pi_cable_iface`, `pi_authorized_keys`); `pi-flash` and `pi` read only
+  this file, so neither needs Ansible or the stick at run time;
 - add both commands to `golden-help`.
 
-`local.defaults.yml` gains public-safe defaults for `pi_wifi_ssid` (empty: use the active
-Wi-Fi), `pi_wifi_country` (`GB`), `pi_cable_iface` (empty: auto) and `pi_authorized_keys`
-(empty list). `local.yml.example`
-documents them.
+`local.defaults.yml` gains public-safe defaults: `pi_default_host` (empty), `pi_wifi_ssid`
+(empty: use the active Wi-Fi), `pi_wifi_country` (`GB`), `pi_cable_iface` (empty: auto) and
+`pi_authorized_keys` (empty list). `local.yml.example` documents them.
 
 ## Stick
 
@@ -200,8 +207,7 @@ the first boot spend time on security updates.
   values anywhere on the card) and several `pi_authorized_keys`.
 - Manual: flash the Pi 3 B+, check Wi-Fi, `pi`, `pi local`, `pi share`, USB step skipped,
   re-flash and reconnect with no host-key error, clock set after an offline boot, `pi share`
-  refused with a VPN up.
-  Flash a Zero 2 W when available and check `pi` over USB.
+  refused with a VPN up. Flash a Zero 2 W when available and check `pi` over USB.
 - Privacy grep of the diff, commit messages and PR body before every push.
 
 ## Accepted risks
