@@ -54,8 +54,10 @@ image_disks() {
 
 # Why disk NAME must not be written; empty if it may. OWN_DISKS: the disks holding the image.
 card_problem() {
-    local m
+    local m labels
     if grep -qxF "$1" <<<"$OWN_DISKS"; then echo "holds the Raspberry Pi image"; return 0; fi
+    if ! labels=$(lsblk -lno LABEL,PARTLABEL "/dev/$1"); then echo "cannot be read by lsblk"; return 0; fi
+    if grep -qiE 'ventoy|vtoyefi|medicat' <<<"$labels"; then echo "looks like the MediCat stick"; return 0; fi
     if ! m=$(lsblk -lnpo MOUNTPOINTS "/dev/$1"); then echo "cannot be read by lsblk"; return 0; fi
     mounts_ok <<<"$m" || echo "has a partition mounted outside /media (this laptop's system?)"
 }

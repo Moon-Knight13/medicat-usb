@@ -84,6 +84,7 @@ cat > "$T/bin/lsblk" <<'EOC'
 case "$*" in
   "-dnbo NAME,RM,SIZE,TYPE") [ -e "$F/lsblk-fails" ] && exit 1; cat "$F/disks" ;;
   "-lnpo MOUNTPOINTS /dev/"*) d=${3#/dev/}; [ -e "$F/mnt.$d" ] && cat "$F/mnt.$d"; exit 0 ;;
+  "-lno LABEL,PARTLABEL /dev/"*) d=${3#/dev/}; [ -e "$F/lab.$d" ] && cat "$F/lab.$d"; exit 0 ;;
   "-lnso NAME,TYPE /dev/sdb1") printf '%s\n' "sdb1 part" "sdb  disk" ;;
   "-o NAME,SIZE,MODEL,LABEL /dev/"*) echo "INFO ${3#/dev/}" ;;
   "-lnpo NAME,TYPE,MOUNTPOINTS /dev/sda") printf '%s\n' "/dev/sda disk" "/dev/sda1 part /media/u/bootfs" "/dev/sda2 part" ;;
@@ -112,6 +113,16 @@ pick /dev/sdd || { echo "refused a card mounted by the desktop"; cat "$T/out"; e
 rm "$F/mnt.sdd"; sed -i '/^sdd /d' "$F/disks"
 pick "" || { echo "refused the one card"; cat "$T/out"; exit 1; }
 grep -q "CHOSEN /dev/sda" "$T/out" || { cat "$T/out"; exit 1; }
+# A disk labelled like the MediCat stick (Ventoy partitions) is never a card, whatever the case
+echo "sde 1 31914983424 disk" >> "$F/disks"
+for labels in "Ventoy Ventoy" "VTOYEFI" " medicat-data" "MediCat"; do
+    printf '%s\n' "" "$labels" > "$F/lab.sde"
+    pick "" || { echo "a stick labelled '$labels' counted as a card"; cat "$T/out"; exit 1; }
+    grep -q "CHOSEN /dev/sda" "$T/out" || { cat "$T/out"; exit 1; }
+    if pick /dev/sde; then echo "accepted a stick labelled '$labels'"; exit 1; fi
+    grep -q "/dev/sde looks like the MediCat stick" "$T/out" || { cat "$T/out"; exit 1; }
+done
+rm "$F/lab.sde"; sed -i '/^sde /d' "$F/disks"
 touch "$F/findmnt-fails"
 if pick ""; then echo "chose a card without knowing where the image is"; exit 1; fi
 rm "$F/findmnt-fails"; touch "$F/lsblk-fails"
