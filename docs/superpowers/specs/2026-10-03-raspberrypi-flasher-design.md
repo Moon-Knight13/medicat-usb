@@ -58,30 +58,43 @@ The image goes in `isos/RaspberryPi/`, which `build` copies to the stick as it d
 ## pi-flash
 
 ```
-pi-flash [--name HOST] [--password] [--device /dev/sdX] [--render-only DIR]
+pi-flash --name HOST [--no-wifi] [--password] [--test] [--device /dev/sdX] [--render-only DIR]
 ```
 
 1. **Find the card.** Removable block devices only, at most 256 GB, not mounted as `/`
    or `/boot`. With one candidate it is pre-selected; with several, or with `--device`,
    the user picks. Model, size and current partition labels are shown and the user types
-   `yes` to continue.
+   `yes` to continue. With `--test`, run `f3probe` on the card first (fake capacity and bad
+   flash), as `make-stick.sh` does for sticks.
 2. **Find the image**, first match wins: a mounted MediCat stick (`*/RaspberryPi/<file>`),
    the kit's `isos/RaspberryPi/`, `~/.cache/golden/raspberrypi/`. If none, download to the
-   cache. The SHA-256 from `image.conf` is checked every time before writing.
+   cache. Before writing, every time: the SHA-256 from `image.conf`, and the image's detached
+   GPG signature (`.sig`, kept next to the image) against Raspberry Pi's public signing key,
+   which is committed as `golden/raspberrypi/raspberrypi-signing-key.asc` with its fingerprint
+   pinned in `image.conf`.
 3. **Collect values** (never printed):
    - user name: the laptop user (`$USER`);
-   - SSH public key: `~/.ssh/id_ed25519.pub` (fail with a clear message if missing);
-   - Wi-Fi name: `pi_wifi_ssid` from `/etc/golden/pi.conf`, otherwise the laptop's active Wi-Fi;
+   - SSH public keys: `~/.ssh/id_ed25519.pub` (fail with a clear message if missing), plus
+     every key in `pi_authorized_keys` from `/etc/golden/pi.conf`, so other golden machines
+     (each has its own key) can log in too;
+   - Wi-Fi name: `pi_wifi_ssid` from `/etc/golden/pi.conf` (for example a separate IoT
+     network), otherwise the laptop's active Wi-Fi. The laptop must have that network saved;
    - Wi-Fi password: `sudo nmcli -s -g 802-11-wireless-security.psk connection show <name>`;
-     open networks are supported (no password line written);
+     open networks are supported (no password line written). Only WPA-PSK/SAE and open
+     networks; enterprise (802.1X) networks are refused with a message;
+   - `--no-wifi`: no Wi-Fi at all. No network name or password touches the card; the Pi is
+     reachable only by cable or USB (for isolated devices such as a future sheep dip);
    - Wi-Fi country: `pi_wifi_country` from `/etc/golden/pi.conf`, default `GB`;
    - time zone: the laptop's time zone;
-   - hostname: `--name`, default `raspberrypi`; validated as a hostname;
+   - hostname: `--name`, required and validated as a hostname. Two Pis with the same name
+     would make mDNS rename one behind the user's back;
    - optional login password: `--password` prompts twice, stores only a SHA-512 crypt hash.
 4. **Write** with `xzcat | sudo dd ... conv=fsync status=progress`, then `partprobe`.
 5. **Configure** the boot partition: render the two templates into `user-data` and
    `network-config`, keep the image's `meta-data`. Unmount and sync.
-6. Print the next steps: insert the card, power the Pi, `pi HOST` after about 2 minutes.
+6. **Forget the old host key**: `ssh-keygen -R HOST.local`, because a re-flashed Pi has new
+   SSH host keys and `pi` would otherwise stop at "REMOTE HOST IDENTIFICATION HAS CHANGED".
+7. Print the next steps: insert the card, power the Pi, `pi HOST` after about 2 minutes.
 
 `--render-only DIR` does steps 3 and 5 into `DIR` with placeholder secrets and no device,
 for tests and review.
@@ -115,17 +128,26 @@ the Wi-Fi password.
 pi [HOST] [local|share|off]
 ```
 
-- No mode: SSH to `HOST.local` (default `raspberrypi`) if it answers; else try USB
+- No mode: SSH to `HOST.local` if it answers (mDNS answers can be stale, so a name that
+  resolves but does not answer falls through); else try USB
   (`10.12.194.1`, the address `rpi-usb-gadget` gives the Pi); else bring up the cable in
   link-local mode and SSH to the Pi found there.
 - `local`: cable, link-local only. No DHCP server, no routing.
 - `share`: cable, NetworkManager shared mode (DHCP and NAT through the laptop). Refused
   unless a Raspberry Pi is already seen on the cable, so the laptop never serves DHCP on
-  someone else's network. Asks the Pi to renew its lease so it gets an address at once.
+  someone else's network. Also refused while the laptop has a VPN up (the Pi's traffic
+  would leave through it, for example into a work network) unless `--force` is given.
+  Asks the Pi to renew its lease so it gets an address at once.
 - `off`: takes the cable profiles down.
 - Finds the Pi on the cable by pinging all IPv6 link-local nodes and matching Raspberry Pi
   MAC prefixes (public vendor prefixes); SSH goes to that link-local address with
   `HostKeyAlias=HOST.local`, so no name resolution is needed.
+- On every connection, before the shell opens, one short SSH call:
+  - **clock**: if the Pi reports its clock as not synchronised and it is more than 60 seconds
+    off the laptop's, set it from the laptop (`sudo date -s @<epoch>`). A Pi has no clock
+    battery, so offline it starts with a wrong time, which breaks TLS and apt;
+  - **power**: if `vcgencmd get_throttled` is not `0x0`, print a one-line warning that the
+    Pi has seen under-voltage since boot (a cause of SD card corruption).
 - The cable interface: the only wired Ethernet device, or `pi_cable_iface` from `/etc/golden/pi.conf`
   when there are several. The laptop profiles `pi-local` and `pi-shared` are created
   without an interface and activated on the chosen one (`nmcli con up ... ifname`).
@@ -141,25 +163,29 @@ normal wired network; `pi off` releases it.
 - create `pi-local` (link-local) and `pi-shared` (shared) with
   `community.general.nmcli` or `nmcli` commands, autoconnect off, no interface;
 - write `/etc/golden/pi.conf` from `local.yml` values (`pi_wifi_ssid`, `pi_wifi_country`,
-  `pi_cable_iface`); `pi-flash` and `pi` read only this file, so neither needs Ansible or
+  `pi_cable_iface`, `pi_authorized_keys`); `pi-flash` and `pi` read only this file, so neither needs Ansible or
   the stick at run time;
 - add both commands to `golden-help`.
 
 `local.defaults.yml` gains public-safe defaults for `pi_wifi_ssid` (empty: use the active
-Wi-Fi), `pi_wifi_country` (`GB`) and `pi_cable_iface` (empty: auto). `local.yml.example`
+Wi-Fi), `pi_wifi_country` (`GB`), `pi_cable_iface` (empty: auto) and `pi_authorized_keys`
+(empty list). `local.yml.example`
 documents them.
 
 ## Stick
 
 `make-stick.sh update` reads `golden/raspberrypi/image.conf`, downloads the image to
-`isos/RaspberryPi/` when missing, verifies its SHA-256 and writes the usual `.ok` marker.
-`status` lists it. Moving to a newer image is a reviewed PR that changes `image.conf`.
+`isos/RaspberryPi/` with its `.sig` when missing, verifies SHA-256 and signature and writes
+the usual `.ok` marker. `status` lists it and its release date. Moving to a newer image is a
+reviewed PR that changes `image.conf`; aim for every few months, since an old image makes
+the first boot spend time on security updates.
 
 ## Error handling
 
 - Every safety check fails closed with a one-line reason: not removable, too large,
-  mounted as system disk, checksum mismatch, no SSH key, no Wi-Fi password found for a
-  secured network.
+  mounted as system disk, checksum or signature mismatch, card failed `f3probe`, no SSH key,
+  no Wi-Fi password found for a secured network, enterprise Wi-Fi, missing `--name`,
+  `pi share` with a VPN up.
 - Interrupted writes leave a card that will not boot cleanly; re-running `pi-flash` is the fix.
 - `pi` prints which path it tried and why it gave up (not plugged in, no Pi seen on the
   cable after 30 seconds).
@@ -170,11 +196,30 @@ documents them.
 - `test/render.sh`: runs `pi-flash --render-only` with fixed inputs, checks the output
   parses as YAML, contains the expected keys, contains no real secrets, and (if installed)
   passes `cloud-init schema`.
-- Manual: flash the Pi 3 B+, check Wi-Fi, `pi`, `pi local`, `pi share`, USB step skipped.
+- `test/render.sh` also covers `--no-wifi` (no `network-config` Wi-Fi block, no Wi-Fi
+  values anywhere on the card) and several `pi_authorized_keys`.
+- Manual: flash the Pi 3 B+, check Wi-Fi, `pi`, `pi local`, `pi share`, USB step skipped,
+  re-flash and reconnect with no host-key error, clock set after an offline boot, `pi share`
+  refused with a VPN up.
   Flash a Zero 2 W when available and check `pi` over USB.
 - Privacy grep of the diff, commit messages and PR body before every push.
+
+## Accepted risks
+
+- **Passwordless sudo with key-only login.** Whoever holds a listed SSH private key has
+  root on the Pi. Reasonable for home devices; `--password` makes sudo ask for a password.
+- **Wi-Fi password readable on an unused card** (FAT boot partition, see First boot).
+- **Image age.** A pinned image is only as current as its last bump; unattended-upgrades
+  closes the gap after first boot.
+
+## Delivery
+
+- One branch and one PR. Tell the main PC's Claude session before merging, since it also
+  edits `golden/ubuntu/playbook.yml`.
+- Update `golden/README.md`, the top-level `README.md` and `docs/explainer/index.html` in
+  the same PR (the repository contract requires the explainer to follow component changes).
 
 ## Open points
 
 None blocking. Roles, the sheep dip and the homelab hand-off are later designs; the
-hand-off needs only what this design already fixes: hostname, user name and SSH key.
+hand-off needs only what this design already fixes: hostname, user name and SSH keys.
