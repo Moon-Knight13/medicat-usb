@@ -3,7 +3,7 @@
 #
 #   pi [HOST]          Wi-Fi (HOST.local) if it answers, else USB, else the Ethernet cable
 #   pi [HOST] local    Ethernet cable only, link-local: no DHCP server, no routing
-#   pi [HOST] share    Ethernet cable, and the Pi gets internet through this laptop
+#   pi [HOST] share    Ethernet cable, and the Pi gets internet through this laptop for the session
 #   pi off             free the Ethernet port again
 #
 # HOST defaults to DEFAULT_HOST in /etc/golden/pi.conf. Without one, pi skips Wi-Fi and finds
@@ -99,6 +99,7 @@ port_in_use() {
 
 # Free the cable port again, then stop with MESSAGE.
 cable_fail() {
+    trap - EXIT
     nmcli connection down pi-shared >/dev/null 2>&1 || true
     nmcli connection down pi-local >/dev/null 2>&1 || true
     die "$*; Ethernet port ${IFACE:-} released"
@@ -131,6 +132,13 @@ ssh_cable() {
     ssh_pi "$ADDR%$IFACE"
 }
 
+# Sharing lasts only as long as the SSH session, so no DHCP server is left on the port.
+share_stop() {
+    nmcli connection down pi-shared >/dev/null 2>&1 || true
+    nmcli connection down pi-local >/dev/null 2>&1 || true
+    echo "Sharing stopped; Ethernet port $IFACE released."
+}
+
 vpn_up() { nmcli -t -f TYPE connection show --active | grep -E '^(vpn|wireguard|tun)$' >/dev/null 2>&1; }
 
 main() {
@@ -159,9 +167,10 @@ main() {
                 cable_fail "other devices on this cable; is it plugged into a network? use: pi local"
             fi
             if vpn_up; then echo "Warning: a VPN is up; the Pi's internet traffic will go through it." >&2; fi
+            trap share_stop EXIT; trap 'exit 130' INT; trap 'exit 143' TERM
             nmcli -w 15 connection up pi-shared ifname "$IFACE" >/dev/null || cable_fail "could not share on $IFACE"
             echo "Sharing this laptop's connection with the Pi"
-            local opts i; mapfile -t opts < <(ssh_opts)
+            local opts i rc=0; mapfile -t opts < <(ssh_opts)
             # Ask the Pi for a DHCP lease now rather than at its next retry; its link drops briefly.
             ssh "${opts[@]}" "$USER@$ADDR%$IFACE" 'sudo -n nmcli -w 0 connection up eth-direct' >/dev/null 2>&1 || true
             ADDR=""
@@ -170,7 +179,9 @@ main() {
                 if [[ -n "$ADDR" ]]; then break; fi
             done
             [[ -n "$ADDR" ]] || cable_fail "lost the Pi after turning on sharing"
-            ssh_cable pi-shared ;;
+            echo "Ethernet port $IFACE held by pi-shared for this SSH session."
+            ssh "${opts[@]}" "$USER@$ADDR%$IFACE" || rc=$?
+            exit "$rc" ;;
         "")
             if [[ -n "$HOST" ]]; then
                 if ping -c1 -W1 "$HOST.local" >/dev/null 2>&1; then ssh_pi "$HOST.local"; fi

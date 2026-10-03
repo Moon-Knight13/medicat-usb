@@ -146,7 +146,9 @@ cable or USB, which find the Pi by its MAC address and need no name.
   shows no network (no neighbour flagged `router`, no IPv6 default or `proto ra` route), so
   the laptop never serves DHCP on someone else's network. Prints a warning when the laptop has a VPN up, since the Pi's
   traffic would then leave through it (for example into a work network).
-  Asks the Pi to renew its lease so it gets an address at once.
+  Asks the Pi to renew its lease so it gets an address at once. Sharing lasts only for the
+  SSH session: `pi` runs ssh (no exec) and on exit, Ctrl-C or TERM takes `pi-shared` and
+  `pi-local` down, leaving the port free.
 - `off`: takes the cable profiles down. Any failure after a cable profile is up (no Pi,
   refused share, lost Pi) takes them down again and says so; before SSH over the cable,
   `pi` names the profile holding the port and that `pi off` frees it.

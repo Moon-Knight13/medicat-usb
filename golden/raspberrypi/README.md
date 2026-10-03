@@ -28,7 +28,7 @@ Boards: Pi 3 B+, Pi 4, Pi 5, Zero 2 W (Raspberry Pi OS Lite, 64-bit).
 
     pi kitchen-pi          Wi-Fi, else USB, else the Ethernet cable
     pi kitchen-pi local    cable only: link-local addresses, no routing
-    pi kitchen-pi share    cable, and the Pi gets internet through this laptop
+    pi kitchen-pi share    cable, and the Pi gets internet through this laptop for the session
     pi off                 free the Ethernet port
 
 A bare `pi` with no host and no `pi_default_host` skips Wi-Fi and tries USB, then the cable.
@@ -46,8 +46,9 @@ the port itself.
 
 `pi share` refuses to start unless the Pi is the only device on the cable and the cable
 shows no sign of a network (no router, no router-advertised or default route), so the
-laptop never serves addresses on someone else's network. It warns when a VPN is up, since
-the Pi's traffic would go through it.
+laptop never serves addresses on someone else's network. Sharing lasts only for that SSH
+session: when it ends, `pi` takes sharing down and frees the port. It warns when a VPN is
+up, since the Pi's traffic would go through it.
 
 At login the Pi warns if it has seen under-voltage since boot: use a stronger supply.
 

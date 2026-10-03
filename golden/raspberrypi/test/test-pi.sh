@@ -140,8 +140,20 @@ released || { echo "share refusal left the port held"; exit 1; }
 printf '%s\n' "fe80::2 lladdr b8:27:eb:aa:bb:cc REACHABLE" > "$T/neigh"; : > "$NMLOG"
 "$RPI/pi" share > "$T/out" 2>&1 || { echo "pi share failed with a lone Pi:"; cat "$T/out"; exit 1; }
 grep -q "connection up pi-shared ifname enxdock" "$NMLOG" || { echo "did not share"; exit 1; }
-grep -q "Ethernet port enxdock held by pi-shared; 'pi off' frees it." "$T/out" || { cat "$T/out"; exit 1; }
+grep -q "Ethernet port enxdock held by pi-shared for this SSH session." "$T/out" || { cat "$T/out"; exit 1; }
 grep -q "@fe80::2%enxdock" "$NMLOG" || { echo "did not ssh to the Pi"; exit 1; }
+# Sharing ends with the SSH session: pi-shared down after ssh, port left free
+tail -n2 "$NMLOG" | grep -qx "connection down pi-shared" || { echo "pi-shared left up after the session:"; cat "$NMLOG"; exit 1; }
+grep -n "" "$NMLOG" | awk -F: '/@fe80::2%enxdock$/ { s = $1 } /:connection down pi-shared$/ { d = $1 } END { exit !(s && d > s) }' \
+    || { echo "pi-shared not brought down after ssh"; cat "$NMLOG"; exit 1; }
+if grep -q "connection up pi-local" <(sed -n '/@fe80::2%enxdock$/,$p' "$NMLOG"); then echo "left pi-local up after sharing"; exit 1; fi
+grep -q "Sharing stopped; Ethernet port enxdock released." "$T/out" || { cat "$T/out"; exit 1; }
+# ssh's exit status is pi's
+printf '#!/bin/sh\necho "$*" >> "$NMLOG"\nexit 7\n' > "$T/bin/ssh"; : > "$NMLOG"
+set +e; "$RPI/pi" share > "$T/out" 2>&1; rc=$?; set -e
+[[ $rc == 7 ]] || { echo "pi share exited $rc, not ssh's 7"; cat "$T/out"; exit 1; }
+grep -qx "connection down pi-shared" "$NMLOG" || { echo "pi-shared left up after a failed session"; exit 1; }
+printf '#!/bin/sh\necho "$*" >> "$NMLOG"\nexit 0\n' > "$T/bin/ssh"
 
 # pi share where the one neighbour is a router: refused like any network
 printf '%s\n' "fe80::2 lladdr b8:27:eb:aa:bb:cc router REACHABLE" > "$T/neigh"; : > "$NMLOG"
