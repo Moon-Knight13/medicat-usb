@@ -70,6 +70,9 @@ favourite apps and settings, applied by Ansible at first boot. Only the identity
 pages are answered at the laptop, so no secrets live on the stick or in this repo. See
 [golden/README.md](golden/README.md).
 
+`golden/raspberrypi/` flashes Raspberry Pi SD cards from a golden laptop (`pi-flash`) and
+connects to the Pi (`pi`); `update` puts the pinned Raspberry Pi OS image on the stick.
+
 ## Adding your own ISOs
 
 Drop files anywhere under `isos/`; the tree is copied to the stick as-is and Ventoy lists
@@ -85,6 +88,7 @@ git-ignored.
 | `make-stick.conf` | repeatable settings, committed |
 | `extra-isos.txt` | extra downloads for `update`, committed |
 | `golden/<name>/` | unattended install recipes; `build` registers them in the Ventoy menu |
+| `golden/raspberrypi/` | `pi-flash` and `pi`: flash a Raspberry Pi's SD card and open a shell on it |
 | `tools/hwtest.sh` | deeper write/read-back test for a suspect stick: `sudo tools/hwtest.sh /dev/sdX` |
 | `tools/vm-test.sh` | boot the ISO with a golden recipe, or the real stick, in a KVM virtual machine |
 | `MediCat.USB.<ver>.7z`, `ventoy/`, `isos/`, `logs/` | fetched or generated locally, git-ignored |
