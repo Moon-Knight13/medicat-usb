@@ -64,8 +64,16 @@ if [[ -n "$VPN_COUNTRY" && "${1:-}" != --no-vpn ]] && command -v protonvpn >/dev
         # falling back to the normal connection. The previous setting comes back afterwards.
         ks_before=$(timeout 30 protonvpn config list 2>/dev/null | awk '$1=="kill-switch"{print $2}')
         [[ "$ks_before" == standard ]] || timeout 30 protonvpn config set kill-switch standard >/dev/null 2>&1 || true
-        out=$(timeout 120 protonvpn connect --country "$VPN_COUNTRY" 2>&1) || true
         vpn_started=1
+        # Switching straight from one server to another fails: Proton checks the new server is
+        # reachable before the old connection's routes are gone, and gives up. Disconnect first,
+        # and try twice.
+        [[ -n "$vpn_before" ]] && { timeout 60 protonvpn disconnect >/dev/null 2>&1 || true; sleep 2; }
+        for try in 1 2; do
+            out=$(timeout 120 protonvpn connect --country "$VPN_COUNTRY" 2>&1) || true
+            [[ "$(proton_server)" == "$VPN_COUNTRY#"* ]] && break
+            [[ $try == 1 ]] && sleep 3
+        done
         srv=$(proton_server)
         if [[ "${srv%%#*}" != "$VPN_COUNTRY" ]]; then
             note "deck not started" "Proton VPN could not connect to $VPN_COUNTRY: ${out:-no output}. Start without VPN: deck --no-vpn"
