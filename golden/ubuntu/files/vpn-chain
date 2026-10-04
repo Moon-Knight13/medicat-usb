@@ -29,11 +29,11 @@ inner_up() { nmcli -t -f NAME connection show --active | grep -qxF "$INNER"; }
 proton_conn() { nmcli -t -f NAME,DEVICE connection show --active | awk -F: '$2 ~ /^proton/ {print $1; exit}'; }
 proton_up() { [[ -n "$(proton_conn)" ]]; }
 proton_server() { proton_conn | sed 's/^ProtonVPN //'; }
-app_running() { pgrep -f '/protonvpn-app' >/dev/null; }
+app_running() { pgrep -f '^[^ ]*python[^ ]* [^ ]*/protonvpn-app' >/dev/null; }
 quit_app() {
-    pkill -f '/protonvpn-app' || return 0
+    pkill -f '^[^ ]*python[^ ]* [^ ]*/protonvpn-app' || return 0
     for _ in $(seq 20); do app_running || return 0; sleep 0.5; done
-    pkill -9 -f '/protonvpn-app'; sleep 1
+    pkill -9 -f '^[^ ]*python[^ ]* [^ ]*/protonvpn-app'; sleep 1
 }
 gateway() { nmcli -g vpn.data connection show "$INNER" 2>/dev/null | tr ',' '\n' | sed -n 's/^ *gateway = //p'; }
 via_proton() { local gw; gw=$(gateway); [[ -n "$gw" ]] && ip route get "$gw" 2>/dev/null | grep -q ' dev proton'; }
