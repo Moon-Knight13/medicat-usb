@@ -104,10 +104,10 @@ status)
         ks_before=$(timeout 30 protonvpn config list 2>/dev/null | awk '$1=="kill-switch"{print $2}')
         [[ "$ks_before" == standard ]] || timeout 30 protonvpn config set kill-switch standard >/dev/null 2>&1 || true
         # The CLI can exit 0 on failure, so check the connection is really up.
-        timeout 120 protonvpn connect --country "$COUNTRY" >/dev/null 2>&1
+        out=$(timeout 120 protonvpn connect --country "$COUNTRY" 2>&1)
         if ! proton_up; then
             [[ -n "$ks_before" && "$ks_before" != standard ]] && timeout 30 protonvpn config set kill-switch "$ks_before" >/dev/null 2>&1
-            die "Proton VPN could not connect to $COUNTRY (signed in? protonvpn signin)."
+            die "Proton VPN could not connect to $COUNTRY: ${out:-no output (timed out?)}"
         fi
         proton_started=1
     fi
