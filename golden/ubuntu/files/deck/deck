@@ -11,39 +11,69 @@ LOCK="${XDG_RUNTIME_DIR:-/run/user/$UID}/deck-busy"
 [[ -e "$LOCK" ]] && { note "deck is busy" "$(cat "$LOCK" 2>/dev/null || echo "deck is being built or updated"). Try again when it finishes."; exit 1; }
 virsh -c $C dominfo $NAME >/dev/null 2>&1 || { note "No deck yet" "Build it with: deck-create (about 15 minutes)"; exit 1; }
 
-# Proton VPN for the session (VPN_COUNTRY in /etc/golden/deck.conf; empty = off). If the VPN is
-# already up it is used as is; if deck connects it, deck disconnects it again afterwards. If it
-# cannot connect, deck does not start, so nothing goes out without it (deck --no-vpn to skip).
+# Proton VPN for the session (VPN_COUNTRY in /etc/golden/deck.conf; empty = off). If it is already
+# up in that country it is used as is; otherwise deck connects it there and afterwards disconnects
+# it, or puts back the country it was on. If it cannot connect, or vpn-chain's work VPN is up,
+# deck does not start, so nothing goes out without it (deck --no-vpn to skip).
 VPN_COUNTRY=""; [[ -f /etc/golden/deck.conf ]] && VPN_COUNTRY=$(sed -n 's/^VPN_COUNTRY=//p' /etc/golden/deck.conf)
-vpn_started=""
-if [[ -n "$VPN_COUNTRY" && "${1:-}" != --no-vpn ]] && command -v protonvpn >/dev/null; then
-    st=$(timeout 30 protonvpn status 2>/dev/null || true)
-    if grep -q "^Status: Connected" <<< "$st"; then
-        grep -q "^Server: ${VPN_COUNTRY}#" <<< "$st" \
-            || note "VPN not in $VPN_COUNTRY" "Already connected: $(sed -n 's/^Server: //p' <<< "$st"). deck uses it as is."
-    else
-        note "Connecting Proton VPN" "Fastest server in $VPN_COUNTRY for deck, with kill switch..."
-        # Kill switch for the session: if the VPN drops, the internet is blocked instead of
-        # falling back to the normal connection. The previous setting comes back afterwards.
-        ks_before=$(timeout 30 protonvpn config list 2>/dev/null | awk '$1=="kill-switch"{print $2}')
-        [[ "$ks_before" == standard ]] || timeout 30 protonvpn config set kill-switch standard >/dev/null 2>&1 || true
-        if timeout 120 protonvpn connect --country "$VPN_COUNTRY" >/dev/null 2>&1; then
-            vpn_started=1
-            note "Proton VPN connected" "$(timeout 30 protonvpn status 2>/dev/null | sed -n 's/^Server: //p')"
-        else
-            [[ -n "$ks_before" && "$ks_before" != standard ]] && timeout 30 protonvpn config set kill-switch "$ks_before" >/dev/null 2>&1
-            note "deck not started" "Proton VPN could not connect to $VPN_COUNTRY (signed in? protonvpn signin). Start without VPN: deck --no-vpn"
-            exit 1
-        fi
-    fi
-fi
+# Proton codes the United Kingdom as UK, not the ISO code GB.
+VPN_COUNTRY=${VPN_COUNTRY^^}; [[ "$VPN_COUNTRY" == GB ]] && VPN_COUNTRY=UK
+# Proton's state comes from NetworkManager: `protonvpn` refuses to run while the Proton app is
+# open, and exits 0 anyway, so its own status and connect cannot be trusted.
+proton_conn() { nmcli -t -f NAME,DEVICE connection show --active | awk -F: '$2 ~ /^proton/ {print $1; exit}'; }
+proton_server() { proton_conn | sed 's/^ProtonVPN //'; }
+APP='^[^ ]*python[^ ]* [^ ]*/protonvpn-app'
+quit_app() {
+    pkill -f "$APP" || return 0
+    for _ in $(seq 20); do pgrep -f "$APP" >/dev/null || return 0; sleep 0.5; done
+    pkill -9 -f "$APP" || true; sleep 1
+}
+vpn_started=""; vpn_before=""
 vpn_off() {
     [[ -n "$vpn_started" ]] || return 0
-    timeout 60 protonvpn disconnect >/dev/null 2>&1 && echo "Proton VPN disconnected."
+    if [[ -n "$vpn_before" ]]; then
+        timeout 120 protonvpn connect --country "$vpn_before" >/dev/null 2>&1
+        echo "Proton VPN back on $(proton_server)."
+    else
+        timeout 60 protonvpn disconnect >/dev/null 2>&1 && echo "Proton VPN disconnected."
+    fi
     [[ -n "${ks_before:-}" && "$ks_before" != standard ]] && timeout 30 protonvpn config set kill-switch "$ks_before" >/dev/null 2>&1
     true
 }
 trap vpn_off EXIT
+if [[ -n "$VPN_COUNTRY" && "${1:-}" != --no-vpn ]] && command -v protonvpn >/dev/null; then
+    # deck's traffic follows the laptop's routes, so with vpn-chain's work VPN up deck could
+    # reach the work network, and Proton is pinned to vpn-chain's country, not deck's.
+    INNER=""; [[ -f /etc/golden/vpn-chain.conf ]] && INNER=$(sed -n 's/^INNER=//p' /etc/golden/vpn-chain.conf)
+    if [[ -n "$INNER" ]] && nmcli -t -f NAME connection show --active | grep -qxF "$INNER"; then
+        note "deck not started" "$INNER is connected (vpn-chain). Run vpn-chain off first, so deck stays off the work network."
+        exit 1
+    fi
+    srv=$(proton_server)
+    if [[ "${srv%%#*}" != "$VPN_COUNTRY" ]]; then
+        # Not connected, or connected to another country: switch to deck's country, and put
+        # the previous one back when deck closes.
+        vpn_before=${srv%%#*}
+        if pgrep -f "$APP" >/dev/null; then
+            note "Closing the Proton VPN app" "deck connects Proton with the CLI, which cannot run beside the app."
+            quit_app
+            pgrep -f "$APP" >/dev/null && { note "deck not started" "Could not close the Proton VPN app. Quit it from its tray icon, then run deck again."; exit 1; }
+        fi
+        note "Connecting Proton VPN" "Fastest server in $VPN_COUNTRY for deck, with kill switch${vpn_before:+ (was $srv; back after deck)}..."
+        # Kill switch for the session: if the VPN drops, the internet is blocked instead of
+        # falling back to the normal connection. The previous setting comes back afterwards.
+        ks_before=$(timeout 30 protonvpn config list 2>/dev/null | awk '$1=="kill-switch"{print $2}')
+        [[ "$ks_before" == standard ]] || timeout 30 protonvpn config set kill-switch standard >/dev/null 2>&1 || true
+        out=$(timeout 120 protonvpn connect --country "$VPN_COUNTRY" 2>&1) || true
+        vpn_started=1
+        srv=$(proton_server)
+        if [[ "${srv%%#*}" != "$VPN_COUNTRY" ]]; then
+            note "deck not started" "Proton VPN could not connect to $VPN_COUNTRY: ${out:-no output}. Start without VPN: deck --no-vpn"
+            exit 1   # the EXIT trap puts the previous connection and kill switch back
+        fi
+        note "Proton VPN connected" "$srv"
+    fi
+fi
 [[ "$(virsh -c $C domstate $NAME 2>/dev/null)" == running ]] || virsh -c $C start $NAME >/dev/null
 # GNOME asks whether virt-viewer may capture keyboard shortcuts, and can only remember the
 # answer for an app with a desktop file (installed as org.virt-manager.virt-viewer.desktop).
