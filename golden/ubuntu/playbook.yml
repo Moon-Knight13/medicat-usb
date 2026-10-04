@@ -741,6 +741,14 @@
         dest: /usr/local/bin/vpn-chain
         mode: "0755"
 
+    - name: VPN chain re-pin after Proton reconnects (NetworkManager dispatcher)
+      ansible.builtin.copy:
+        src: vpn-chain-dispatcher
+        dest: /etc/NetworkManager/dispatcher.d/90-vpn-chain
+        mode: "0755"
+        owner: root
+        group: root
+
     # One short command per country too: vpn-chain-ee, vpn-chain-gb ... (a ">" cannot be part of
     # a command name; the shell would read it as "write output to a file").
     - name: VPN chain commands per country
