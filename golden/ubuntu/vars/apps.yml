@@ -26,6 +26,11 @@ apt_repos:
     uri: https://packages.microsoft.com/repos/code
     suites: stable
     components: main
+  - name: signal
+    key_url: https://updates.signal.org/desktop/apt/keys.asc
+    uri: https://updates.signal.org/desktop/apt
+    suites: xenial               # Signal's only suite, for every Ubuntu release
+    components: main
 
 # apt packages, grouped so a group is easy to drop.
 apt_packages:
@@ -78,6 +83,7 @@ apt_packages:
     - flatpak
     - gnome-software-plugin-flatpak
     - gnome-shell-extension-appindicator
+    - signal-desktop
 
 # Packages shipped as .deb downloads rather than repos.
 deb_urls:
