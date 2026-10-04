@@ -1,0 +1,17 @@
+#!/bin/sh
+# Managed by golden/ubuntu/playbook.yml. When Proton VPN (re)connects, NetworkManager removes
+# every route on the old proton interface, including the ones vpn-chain pinned there. Put them
+# back on the new interface; the "prohibit" fallbacks stay, so nothing went direct meanwhile.
+IFACE=$1 ACTION=$2
+case "$IFACE" in proton*) ;; *) exit 0 ;; esac
+[ "$ACTION" = up ] && [ -s /run/vpn-chain.routes ] || exit 0
+while read -r a; do
+    [ -n "$a" ] && ip route replace "$a/32" dev "$IFACE" metric 0
+done < /run/vpn-chain.routes
+# Proton's DNS can change with the server; pin the new one too.
+for a in $IP4_NAMESERVERS; do
+    grep -qxF "$a" /run/vpn-chain.routes && continue
+    ip route replace "$a/32" dev "$IFACE" metric 0 && ip route replace prohibit "$a/32" metric 1 \
+        && echo "$a" >> /run/vpn-chain.routes
+done
+exit 0

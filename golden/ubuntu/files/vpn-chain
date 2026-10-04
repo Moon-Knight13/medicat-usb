@@ -7,19 +7,52 @@
 #   vpn-chain off         work VPN down, then Proton down (only if vpn-chain connected it),
 #                         kill switch back to what it was
 #   vpn-chain status      what is connected, and whether the work VPN really goes through Proton
+#
+# Works with the Proton VPN app too: if the app already has Proton connected, vpn-chain uses that
+# connection; if the app is open but not connected, vpn-chain closes it (the CLI refuses to run
+# beside it) and connects with the CLI.
 set -uo pipefail
 COUNTRY=EE; INNER=work   # INNER: the work VPN's NetworkManager name, set in vpn-chain.conf
 # shellcheck disable=SC1091
 [[ -f /etc/golden/vpn-chain.conf ]] && . /etc/golden/vpn-chain.conf
 STATE="${XDG_RUNTIME_DIR:-/run/user/$UID}/vpn-chain.state"
+# Root-owned list of addresses pinned to Proton; the NetworkManager dispatcher script
+# 90-vpn-chain re-pins them each time Proton (re)connects.
+ROUTES=/run/vpn-chain.routes
 note() { echo "$2"; notify-send -a "VPN chain" -i network-vpn "$1" "$2" 2>/dev/null || true; }
 die() { note "VPN chain" "$*"; exit 1; }
 # Root for the route pin: sudo in a terminal, the graphical password/fingerprint prompt from a launcher.
 asroot() { if [[ -t 0 ]]; then sudo "$@"; else pkexec "$@"; fi; }
 inner_up() { nmcli -t -f NAME connection show --active | grep -qxF "$INNER"; }
-proton_server() { timeout 30 protonvpn status 2>/dev/null | sed -n 's/^Server: //p'; }
+# Proton's NetworkManager connection ("ProtonVPN UK#12"), from the CLI or the app; empty if down.
+# Used instead of `protonvpn status`, which fails (with exit code 0) while the app is open.
+proton_conn() { nmcli -t -f NAME,DEVICE connection show --active | awk -F: '$2 ~ /^proton/ {print $1; exit}'; }
+proton_up() { [[ -n "$(proton_conn)" ]]; }
+proton_server() { proton_conn | sed 's/^ProtonVPN //'; }
+app_running() { pgrep -f '/protonvpn-app' >/dev/null; }
+quit_app() {
+    pkill -f '/protonvpn-app' || return 0
+    for _ in $(seq 20); do app_running || return 0; sleep 0.5; done
+    pkill -9 -f '/protonvpn-app'; sleep 1
+}
 gateway() { nmcli -g vpn.data connection show "$INNER" 2>/dev/null | tr ',' '\n' | sed -n 's/^ *gateway = //p'; }
 via_proton() { local gw; gw=$(gateway); [[ -n "$gw" ]] && ip route get "$gw" 2>/dev/null | grep -q ' dev proton'; }
+proton_dns() { nmcli -g IP4.DNS device show "$1" 2>/dev/null | tr '|' '\n' | sed 's/ //g; /^$/d'; }
+# Each address: to Proton's interface (metric 0), and a "prohibit" fallback (metric 1) that beats
+# NetworkManager's own route via the Wi-Fi router (metric 50) while Proton reconnects, so the work
+# VPN waits for Proton instead of going direct. One root call, so one password prompt.
+pin() {
+    asroot sh -c 'dev=$1; shift; : > '"$ROUTES"'
+        for a; do
+            ip route replace "$a/32" dev "$dev" metric 0 && ip route replace prohibit "$a/32" metric 1 || exit 1
+            echo "$a" >> '"$ROUTES"'
+        done' sh "$@"
+}
+unpin() {
+    asroot sh -c 'for a in $(cat '"$ROUTES"' 2>/dev/null); do
+            ip route del "$a/32" metric 0; ip route del prohibit "$a/32" metric 1
+        done 2>/dev/null; rm -f '"$ROUTES"
+}
 
 case "${1:-}" in
 off)
@@ -27,22 +60,28 @@ off)
     proton_started=""; ks_before=""; pinned=""
     # shellcheck disable=SC1090
     [[ -f "$STATE" ]] && . "$STATE"
-    # shellcheck disable=SC2086
-    [[ -n "$pinned" ]] && asroot ip route del $pinned 2>/dev/null
-    if [[ -n "$proton_started" ]]; then
-        timeout 60 protonvpn disconnect >/dev/null 2>&1 && echo "Proton VPN disconnected."
+    [[ -n "$pinned" || -f "$ROUTES" ]] && unpin
+    if [[ -n "$proton_started" ]] && proton_up; then
+        timeout 60 protonvpn disconnect >/dev/null 2>&1
+        # The CLI does nothing while the Proton app is open; take the connection down directly.
+        proton_up && nmcli connection down "$(proton_conn)" >/dev/null 2>&1
+        proton_up && echo "Proton VPN is still connected; disconnect it in the Proton app." \
+            || echo "Proton VPN disconnected."
     fi
     [[ -n "$ks_before" && "$ks_before" != standard ]] && timeout 30 protonvpn config set kill-switch "$ks_before" >/dev/null 2>&1
     rm -f "$STATE"
     note "VPN chain off" "$INNER and Proton VPN (if vpn-chain started it) are disconnected."
     ;;
 status)
-    timeout 30 protonvpn status 2>/dev/null | grep -E '^(Status|Server):'
+    if proton_up; then echo "Proton: connected, $(proton_server)"; else echo "Proton: not connected"; fi
     if inner_up; then
         if via_proton; then echo "$INNER: connected, through Proton"; else echo "$INNER: connected, NOT through Proton"; fi
+        for a in $(proton_dns "$(proton_conn | xargs -r -I{} nmcli -g GENERAL.DEVICES connection show {})"); do
+            ip route get "$a" 2>/dev/null | grep -q ' dev proton' || echo "Proton's DNS ($a) is routed into $INNER, not Proton"
+        done
     else echo "$INNER: not connected"; fi
     ;;
--h|--help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//' ;;
+-h|--help) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//' ;;
 *)
     [[ -n "${1:-}" ]] && COUNTRY=$1
     command -v protonvpn >/dev/null || die "Proton VPN is not installed."
@@ -50,14 +89,23 @@ status)
     inner_up && die "$INNER is already connected directly. Disconnect it first so it can go through Proton."
     proton_started=""; ks_before=""
     rm -f "$STATE"
-    st=$(timeout 30 protonvpn status 2>/dev/null || true)
-    if grep -q '^Status: Connected' <<< "$st"; then
-        note "Using the Proton VPN connection" "Already connected: $(proton_server). Not changing it."
+    if proton_up; then
+        srv=$(proton_server)
+        note "Using the Proton VPN connection" "Already connected: $srv. Not changing it."
+        [[ "${srv%%#*}" == "${COUNTRY^^}" || ( "${srv%%#*}" == UK && "${COUNTRY^^}" == GB ) ]] \
+            || note "VPN chain warning" "Proton is on $srv, not $COUNTRY. To change: vpn-chain off, switch Proton, run again."
     else
+        if app_running; then
+            note "VPN chain" "Closing the Proton VPN app (not connected) so the CLI can connect..."
+            quit_app
+            app_running && die "Could not close the Proton VPN app. Quit it from its tray icon, or connect Proton in the app, then run again."
+        fi
         note "VPN chain" "Connecting Proton VPN to $COUNTRY with kill switch..."
         ks_before=$(timeout 30 protonvpn config list 2>/dev/null | awk '$1=="kill-switch"{print $2}')
         [[ "$ks_before" == standard ]] || timeout 30 protonvpn config set kill-switch standard >/dev/null 2>&1 || true
-        if ! timeout 120 protonvpn connect --country "$COUNTRY" >/dev/null 2>&1; then
+        # The CLI can exit 0 on failure, so check the connection is really up.
+        timeout 120 protonvpn connect --country "$COUNTRY" >/dev/null 2>&1
+        if ! proton_up; then
             [[ -n "$ks_before" && "$ks_before" != standard ]] && timeout 30 protonvpn config set kill-switch "$ks_before" >/dev/null 2>&1
             die "Proton VPN could not connect to $COUNTRY (signed in? protonvpn signin)."
         fi
@@ -67,11 +115,14 @@ status)
     # NetworkManager pins a route to the work VPN's server via the Wi-Fi/Ethernet router, and
     # Proton lets specific routes in the main table win over its own, so the work VPN would
     # skip Proton. Pin that server to Proton's interface first (lowest metric wins); needs sudo.
+    # Pin Proton's own gateway/DNS too: a work VPN that routes 10.0.0.0/8-ish ranges swallows it,
+    # Proton's app then loses its agent and reconnects every minute or two.
     gw=$(gateway); pdev=$(ip route get 1.1.1.1 2>/dev/null | grep -o 'dev [^ ]*' | cut -d' ' -f2)
     [[ -n "$gw" && "$pdev" == proton* ]] || die "Could not find $INNER's server or Proton's interface. Run: vpn-chain off"
-    echo "Pinning $INNER's server ($gw) to Proton's interface $pdev (asks for your password)..."
-    asroot ip route replace "$gw/32" dev "$pdev" metric 0 || die "Could not pin the route. Run: vpn-chain off"
-    printf 'proton_started=%s\nks_before=%s\npinned=%q\n' "$proton_started" "$ks_before" "$gw/32 dev $pdev" > "$STATE"
+    mapfile -t pdns < <(proton_dns "$pdev")
+    echo "Pinning $INNER's server ($gw) and Proton's DNS (${pdns[*]:-none}) to $pdev (asks for your password)..."
+    pin "$pdev" "$gw" "${pdns[@]}" || die "Could not pin the route. Run: vpn-chain off"
+    printf 'proton_started=%s\nks_before=%s\npinned=1\n' "$proton_started" "$ks_before" > "$STATE"
     via_proton || die "Traffic to $INNER's server would not go through Proton. Stopped; run: vpn-chain off"
     echo "Connecting $INNER through Proton ($(proton_server)); enter its password in the dialog..."
     if ! nmcli connection up "$INNER" >/dev/null; then
