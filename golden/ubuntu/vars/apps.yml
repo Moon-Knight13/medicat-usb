@@ -199,7 +199,7 @@ firefox_dark_pages: true
 # vpn-chain: double VPN on demand. Proton VPN to a country (kill switch on), then the work VPN
 # (first entry of `vpns:` in local.yml, or vpn_chain_inner) inside it. Each country gets an app
 # launcher "VPN: Proton <name> → <work VPN>"; the first is the default for plain `vpn-chain`.
-# Codes are Proton's (GB, not UK).
+# Codes are ISO (GB, not UK); vpn-chain turns GB into Proton's UK for the Proton CLI.
 vpn_chain_countries:
   - { code: EE, name: Estonia }
   - { code: GB, name: UK }
