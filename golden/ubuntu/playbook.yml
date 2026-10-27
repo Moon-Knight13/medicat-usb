@@ -78,8 +78,18 @@
       when: nvidia_gpu.rc == 0 and nvidia_container_toolkit
       notify: Apt update
 
-    - name: Proton VPN repository package
+    # The release package updates itself from its own repo, so once installed it is
+    # newer than the pinned .deb and apt refuses the downgrade. Only the first install
+    # goes through here.
+    - name: Check for the Proton VPN repo package
+      ansible.builtin.command: dpkg-query -W -f=${Status} protonvpn-stable-release
+      register: protonvpn_release
+      changed_when: false
+      failed_when: false
       when: protonvpn
+
+    - name: Proton VPN repository package
+      when: protonvpn and 'install ok installed' not in protonvpn_release.stdout
       block:
         - name: Download Proton VPN repo .deb
           ansible.builtin.get_url:
