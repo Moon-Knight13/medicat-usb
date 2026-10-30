@@ -34,15 +34,20 @@ if apt-get -q update && apt-get -qy -o Dpkg::Options::=--force-confold full-upgr
 else ok=0; fi
 snap refresh && summary+=("snaps") || ok=0
 if command -v flatpak >/dev/null; then flatpak update --system --noninteractive --assumeyes && summary+=("Flatpaks") || ok=0; fi
+deck_ok=1
 if [[ -x /usr/local/bin/deck-update ]] && as_user virsh -c qemu:///session dominfo deck >/dev/null 2>&1; then
     if [[ "$(as_user virsh -c qemu:///session domstate deck)" == "shut off" ]]; then
-        as_user /usr/local/bin/deck-update && summary+=("deck") || ok=0
+        as_user /usr/local/bin/deck-update && summary+=("deck") || deck_ok=0
     else echo "deck is running; its update waits for next week (or run deck-update)"; fi
 fi
 reboot=""; [[ -f /var/run/reboot-required ]] && reboot=" A restart is needed to finish (kernel or system library update)."
 if (( ok )); then
     date +%s > "$STAMP"
-    note "Weekly update finished" "Updated: $(IFS=,; echo "${summary[*]}" | sed 's/,/, /g').$reboot"
+    if (( deck_ok )); then
+        note "Weekly update finished" "Updated: $(IFS=,; echo "${summary[*]}" | sed 's/,/, /g').$reboot"
+    else
+        note -u normal "Weekly update finished (deck failed)" "Updated: $(IFS=,; echo "${summary[*]}" | sed 's/,/, /g'). deck update failed; try: deck-update$reboot"
+    fi
 else
     note -u critical "Weekly update had a problem" "Updated: ${summary[*]:-nothing}. It retries next hour when idle. Log: $LOG$reboot"
 fi
