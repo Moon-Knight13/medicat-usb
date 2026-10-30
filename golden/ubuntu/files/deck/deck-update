@@ -29,6 +29,20 @@ if [[ -n "$TIMEZONE" ]]; then
     echo "Time zone: $TIMEZONE (matches deck's VPN country)"
     agent "timedatectl set-timezone '$TIMEZONE'"
 fi
+if agent 'dpkg --audit 2>/dev/null | grep -q "."' 10 2>/dev/null; then
+    echo "Recovering interrupted dpkg..."
+    agent 'export DEBIAN_FRONTEND=noninteractive
+broken=$(dpkg -l 2>/dev/null | awk "/^i[FHU]/{print \$2}" | grep -xv qemu-guest-agent)
+[ -n "$broken" ] && dpkg --configure $broken 2>&1
+if dpkg -l qemu-guest-agent 2>/dev/null | grep -q "^i[FHU]"; then
+    systemd-run --quiet dpkg --configure qemu-guest-agent
+fi
+true' 300 || {
+        echo "Waiting for guest agent to recover..."
+        for _ in $(seq 1 20); do sleep 3; agent true 10 >/dev/null 2>&1 && break; done
+        agent true 10 >/dev/null 2>&1 || { echo "guest agent did not recover after dpkg fix"; exit 1; }
+    }
+fi
 echo "Updating packages (apt)..."
 agent 'export DEBIAN_FRONTEND=noninteractive; apt-get -qq update && apt-get -y -qq full-upgrade >/tmp/deck-apt.log 2>&1 && apt-get -y -qq autoremove >>/tmp/deck-apt.log 2>&1 && echo "apt: $(grep -c "^Setting up" /tmp/deck-apt.log) packages updated"'
 echo "Updating snaps (Firefox etc.)..."
