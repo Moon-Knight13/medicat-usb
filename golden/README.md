@@ -236,3 +236,10 @@ tools/vm-test.sh iso --unattended    # identity/storage pre-answered with throwa
 tools/vm-test.sh stick /dev/sdX      # boots the real stick read-only to check the Ventoy menu
 OFFLINE=1 tools/vm-test.sh stick /dev/sdX --install   # the real thing: install from the stick, no network
 ```
+
+## golden/raspberrypi
+
+Not an installer recipe: `pi-flash` writes a Raspberry Pi's SD card from a golden laptop,
+and `pi` opens a shell on the Pi over Wi-Fi, USB or a direct Ethernet cable. The playbook
+installs both and the stick carries the pinned image (`isos/RaspberryPi/`), so a Pi can be
+flashed offline. Details: [raspberrypi/README.md](raspberrypi/README.md).

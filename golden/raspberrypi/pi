@@ -1,0 +1,249 @@
+#!/usr/bin/env bash
+# pi — open a shell on a Raspberry Pi set up by pi-flash.
+#
+#   pi [HOST]          Wi-Fi (HOST.local) if it answers, else USB, else the Ethernet cable
+#   pi [HOST] local    Ethernet cable only, link-local: no DHCP server, no routing
+#   pi [HOST] share    Ethernet cable, and the Pi gets internet through this laptop for the session
+#   pi off             free the Ethernet port again
+#   pi reset [--remove] undo anything pi did to this laptop's networking (--remove: also
+#                      delete the pi-local and pi-shared profiles; golden-update re-creates them)
+#
+# HOST defaults to DEFAULT_HOST in /etc/golden/pi.conf. Without one, pi skips Wi-Fi and finds
+# the Pi on USB or the cable by its MAC address.
+set -euo pipefail
+
+PI_CONF="${PI_CONF:-/etc/golden/pi.conf}"
+SYS_NET="${SYS_NET:-/sys/class/net}"
+PI_OUIS="b8:27:eb dc:a6:32 e4:5f:01 d8:3a:dd 28:cd:c1 2c:cf:67 88:a2:9e"   # Raspberry Pi vendor prefixes
+USB_ADDR=10.12.194.1                                                       # the Pi on USB (rpi-usb-gadget)
+
+die()      { echo "pi: $*" >&2; exit 1; }
+conf_get() { sed -n "s/^$1=//p" "$PI_CONF" 2>/dev/null | head -n1 || true; }
+usage()    { sed -n '2,12s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 1; }
+
+# The Ethernet port the Pi is plugged into: CABLE_IFACE, or the only physical wired port
+# that is not in use on a network. A Pi's own USB link (cdc_ether, rndis_host, cdc_ncm) is
+# not a cable port. Ports are never taken over from a real network.
+cable_iface() {
+    local want dev type drv conn ports=() free=() busy=() list
+    want=$(conf_get CABLE_IFACE)
+    if [[ -n "$want" ]]; then
+        conn=$(port_in_use "$want")
+        [[ -z "$conn" ]] || die "$want is connected to a network ($conn); pi will not take it over. Unplug it from the network and plug in the Pi, or change pi_cable_iface."
+        echo "$want"; return 0
+    fi
+    while IFS=: read -r dev type; do
+        [[ "$type" == ethernet && -e "$SYS_NET/$dev/device" ]] || continue
+        drv=$(basename "$(readlink "$SYS_NET/$dev/device/driver" 2>/dev/null || true)")
+        case "$drv" in cdc_ether|rndis_host|cdc_ncm) continue ;; esac
+        ports+=("$dev")
+    done < <(nmcli -t -f DEVICE,TYPE device)
+    for dev in "${ports[@]}"; do
+        conn=$(port_in_use "$dev")
+        if [[ -z "$conn" ]]; then free+=("$dev"); else busy+=("$dev on $conn"); fi
+    done
+    list=$(printf '%s, ' "${busy[@]}"); list=${list%, }
+    case ${#free[@]} in
+        1) if [[ ${#busy[@]} -gt 0 ]]; then echo "Skipping Ethernet ports in use: $list" >&2; fi
+           echo "${free[0]}" ;;
+        0) [[ ${#busy[@]} -gt 0 ]] || die "no Ethernet port found; plug in the adapter or dock"
+           die "every Ethernet port is in use ($list); unplug one from the network or plug in a USB Ethernet adapter for the Pi" ;;
+        *) die "several free Ethernet ports (${free[*]}); set pi_cable_iface in vars/local.yml" ;;
+    esac
+}
+
+# Link-local IPv6 address of a Raspberry Pi on the port; empty if none answers.
+pi_on_cable() {
+    ping -6 -c2 -W1 "ff02::1%$1" >/dev/null 2>&1 || true
+    ip -6 neigh show dev "$1" 2>/dev/null | awk -v ouis="$PI_OUIS" '
+        BEGIN { n = split(ouis, o, " ") }
+        $1 ~ /^fe80/ { mac = tolower($3); for (i = 1; i <= n; i++) if (index(mac, o[i]) == 1) { print $1; exit } }' || true
+}
+
+# Succeed only if a Raspberry Pi is the one device answering on the port, over IPv6 and in
+# the IPv4 neighbour table. The laptop's own addresses are never in its neighbour tables;
+# one Pi may show under several addresses.
+only_pi_on_cable() {
+    local mac out
+    ping -6 -c2 -W1 "ff02::1%$1" >/dev/null 2>&1 || true
+    mac=$(ip -6 neigh show dev "$1" | awk -v ouis="$PI_OUIS" '
+        /FAILED|INCOMPLETE/ { next }
+        { for (i = 1; i < NF; i++) if ($i == "lladdr") seen[tolower($(i + 1))] = 1 }
+        END {
+            n = 0; for (m in seen) { n++; mac = m }
+            if (n != 1) exit 1
+            k = split(ouis, o, " "); for (i = 1; i <= k; i++) if (index(mac, o[i]) == 1) { print mac; exit 0 }
+            exit 1
+        }') || return 1
+    out=$(ip -4 neigh show dev "$1") || return 1
+    awk -v pi="$mac" '
+        /FAILED|INCOMPLETE/ { next }
+        { for (i = 1; i < NF; i++) if ($i == "lladdr" && tolower($(i + 1)) != pi) other = 1 }
+        END { exit other }' <<<"$out"
+}
+
+# Fail if the port shows a real network: a neighbour flagged as router, an IPv6 default or
+# router-advertised route, or an IPv4 lease on a connection that is not one of ours.
+cable_is_private() {
+    local out conn
+    out=$(ip -6 neigh show dev "$1") || return 1
+    if grep -qw router <<<"$out"; then return 1; fi
+    out=$(ip -6 route show dev "$1") || return 1
+    if grep -qE '^default|proto ra' <<<"$out"; then return 1; fi
+    conn=$(nmcli -g GENERAL.CONNECTION device show "$1" 2>/dev/null || true)
+    case "$conn" in pi-local|pi-shared) return 0 ;; esac
+    out=$(ip -4 -o addr show dev "$1") || return 1
+    if awk '$3 == "inet" && $4 !~ /^169\.254\./ { found = 1 } END { exit !found }' <<<"$out"; then return 1; fi
+    return 0
+}
+
+# The connection holding PORT when it is on a real network and not ours; empty if PORT is free
+# (unused, only trying to connect, or held by pi-local or pi-shared).
+port_in_use() {
+    local conn
+    conn=$(nmcli -g GENERAL.CONNECTION device show "$1" 2>/dev/null || true)
+    case "$conn" in ""|pi-local|pi-shared) return 0 ;; esac
+    cable_is_private "$1" || echo "$conn"
+}
+
+# Free the cable port again, then stop with MESSAGE.
+cable_fail() {
+    trap - EXIT
+    nmcli connection down pi-shared >/dev/null 2>&1 || true
+    nmcli connection down pi-local >/dev/null 2>&1 || true
+    die "$*; Ethernet port ${IFACE:-} released"
+}
+
+# Bring PROFILE up on the cable port and wait up to 30 s for a Pi. Sets IFACE and ADDR.
+cable_up() {
+    IFACE=$(cable_iface)
+    nmcli -w 15 connection up "$1" ifname "$IFACE" >/dev/null || cable_fail "could not bring up $1 on $IFACE"
+    echo "Ethernet $IFACE up ($1), looking for the Pi..."
+    local i
+    for i in $(seq 1 30); do
+        ADDR=$(pi_on_cable "$IFACE")
+        if [[ -n "$ADDR" ]]; then return 0; fi
+        sleep 1
+    done
+    cable_fail "no Raspberry Pi seen on $IFACE after 30 seconds"
+}
+
+ssh_opts() { if [[ -n "$HOST" ]]; then printf '%s\n' -o "HostKeyAlias=$HOST.local"; fi; }
+
+ssh_pi() {
+    local opts; mapfile -t opts < <(ssh_opts)
+    exec ssh "${opts[@]}" "$USER@$1"
+}
+
+# ssh to the Pi on the cable, which PROFILE holds.
+ssh_cable() {
+    echo "Ethernet port $IFACE held by $1; 'pi off' frees it."
+    ssh_pi "$ADDR%$IFACE"
+}
+
+# Sharing lasts only as long as the SSH session, so no DHCP server is left on the port.
+share_stop() {
+    nmcli connection down pi-shared >/dev/null 2>&1 || true
+    nmcli connection down pi-local >/dev/null 2>&1 || true
+    echo "Sharing stopped; Ethernet port $IFACE released."
+}
+
+# Take pi-local and pi-shared down wherever they are active and show the state. NetworkManager
+# puts those ports back on their usual profiles by itself; asking it to connect a port could
+# pick a pi profile again. Touches no other profile.
+reset_network() {
+    local name dev apath type out
+    while IFS=: read -r name dev apath; do
+        case "$name" in pi-local|pi-shared) ;; *) continue ;; esac
+        nmcli connection down apath "$apath" >/dev/null 2>&1 || true
+        echo "$name taken down${dev:+ on $dev}"
+    done < <(nmcli -t -f NAME,DEVICE,ACTIVE-PATH connection show --active 2>/dev/null || true)
+    while IFS=: read -r dev type; do                 # check: no wired port left on a pi profile
+        [[ "$type" == ethernet ]] || continue
+        name=$(nmcli -g GENERAL.CONNECTION device show "$dev" 2>/dev/null || true)
+        case "$name" in pi-local|pi-shared) ;; *) continue ;; esac
+        nmcli connection down "$name" >/dev/null 2>&1 || true
+        echo "$name still active on $dev; taken down again"
+    done < <(nmcli -t -f DEVICE,TYPE device 2>/dev/null || true)
+    if [[ "$1" == 1 ]]; then
+        nmcli connection delete pi-local >/dev/null 2>&1 || true
+        nmcli connection delete pi-shared >/dev/null 2>&1 || true
+        echo "Removed the pi-local and pi-shared profiles; golden-update re-creates them."
+    fi
+    echo "Active connections:"
+    out=$(nmcli -t -f NAME,DEVICE connection show --active 2>/dev/null || true)
+    awk -F: 'NF { print "  " $1 " (" ($2 == "" ? "no device" : $2) ")" }' <<<"$out"
+    echo "Default routes:"
+    out=$( { ip route show default; ip -6 route show default; } 2>/dev/null || true)
+    awk 'NF { print "  " $0 }' <<<"$out"
+    if out=$(nft list tables 2>/dev/null); then
+        if grep -qi nm-shared <<<"$out"; then echo "A NetworkManager sharing firewall table is still loaded."
+        else echo "No NetworkManager sharing firewall table left."; fi
+    else
+        echo "Sharing firewall tables: could not check without sudo."
+    fi
+}
+
+vpn_up() { nmcli -t -f TYPE connection show --active | grep -E '^(vpn|wireguard|tun)$' >/dev/null 2>&1; }
+
+main() {
+    HOST="" MODE="" REMOVE=0
+    local a
+    for a in "$@"; do
+        case "$a" in
+            local|share|off|reset) MODE=$a ;;
+            --remove) REMOVE=1 ;;
+            -*) usage ;;
+            *) [[ -z "$HOST" ]] || usage; HOST=$a ;;
+        esac
+    done
+    if [[ "$REMOVE" == 1 && "$MODE" != reset ]] || [[ "$MODE" == reset && -n "$HOST" ]]; then usage; fi
+    HOST=${HOST:-$(conf_get DEFAULT_HOST)}
+
+    case "$MODE" in
+        off)
+            nmcli connection down pi-shared >/dev/null 2>&1 || true
+            nmcli connection down pi-local >/dev/null 2>&1 || true
+            echo "Ethernet port released" ;;
+        reset)
+            reset_network "$REMOVE" ;;
+        local)
+            cable_up pi-local
+            ssh_cable pi-local ;;
+        share)
+            cable_up pi-local        # only a Pi may be on this cable before we serve DHCP on it
+            if ! only_pi_on_cable "$IFACE" || ! cable_is_private "$IFACE"; then
+                cable_fail "other devices on this cable; is it plugged into a network? use: pi local"
+            fi
+            if vpn_up; then echo "Warning: a VPN is up; the Pi's internet traffic will go through it." >&2; fi
+            trap share_stop EXIT; trap 'exit 130' INT; trap 'exit 143' TERM
+            nmcli -w 15 connection up pi-shared ifname "$IFACE" >/dev/null || cable_fail "could not share on $IFACE"
+            echo "Sharing this laptop's connection with the Pi"
+            local opts i rc=0; mapfile -t opts < <(ssh_opts)
+            # Ask the Pi for a DHCP lease now rather than at its next retry; its link drops briefly.
+            ssh "${opts[@]}" "$USER@$ADDR%$IFACE" 'sudo -n nmcli -w 0 connection up eth-direct' >/dev/null 2>&1 || true
+            ADDR=""
+            for i in $(seq 1 20); do
+                sleep 1; ADDR=$(pi_on_cable "$IFACE")
+                if [[ -n "$ADDR" ]]; then break; fi
+            done
+            [[ -n "$ADDR" ]] || cable_fail "lost the Pi after turning on sharing"
+            echo "Ethernet port $IFACE held by pi-shared for this SSH session."
+            ssh "${opts[@]}" "$USER@$ADDR%$IFACE" || rc=$?
+            exit "$rc" ;;
+        "")
+            if [[ -n "$HOST" ]]; then
+                if ping -c1 -W1 "$HOST.local" >/dev/null 2>&1; then ssh_pi "$HOST.local"; fi
+                echo "No answer from $HOST.local (Wi-Fi)."
+            else
+                echo "No host given and no DEFAULT_HOST: Wi-Fi skipped."
+            fi
+            if ping -c1 -W1 "$USB_ADDR" >/dev/null 2>&1; then ssh_pi "$USB_ADDR"; fi
+            echo "No answer from $USB_ADDR (USB). Trying the Ethernet cable."
+            cable_up pi-local
+            ssh_cable pi-local ;;
+    esac
+}
+
+if [[ -n "${PI_SOURCE_ONLY:-}" ]]; then return 0; fi
+main "$@"

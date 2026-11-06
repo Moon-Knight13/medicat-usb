@@ -2,3 +2,10 @@
 # Defaults used when vars/local.yml is absent (public-safe placeholders).
 git_name: "{{ golden_user }}"
 git_email: ""
+
+# Raspberry Pi (pi-flash, pi): see vars/local.yml.example.
+pi_default_host: ""
+pi_wifi_ssid: ""
+pi_wifi_country: GB
+pi_cable_iface: ""
+pi_authorized_keys: []

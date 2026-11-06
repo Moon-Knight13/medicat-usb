@@ -1,0 +1,8 @@
+# Managed by golden/ubuntu/playbook.yml (pi_* in vars/local.yml). Read by pi-flash and pi.
+DEFAULT_HOST={{ pi_default_host | default('') }}
+WIFI_SSID={{ pi_wifi_ssid | default('') }}
+WIFI_COUNTRY={{ pi_wifi_country | default('GB') }}
+CABLE_IFACE={{ pi_cable_iface | default('') }}
+{% for key in pi_authorized_keys | default([]) %}
+KEY={{ key }}
+{% endfor %}
