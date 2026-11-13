@@ -101,6 +101,26 @@
             deb: /tmp/protonvpn-stable-release.deb
           notify: Apt update
 
+    - name: Check for the Synaptics repository keyring (DisplayLink)
+      ansible.builtin.command: dpkg-query -W -f=${Status} synaptics-repository-keyring
+      register: synaptics_keyring
+      changed_when: false
+      failed_when: false
+      when: displaylink
+
+    - name: Synaptics repository package (DisplayLink)
+      when: displaylink and 'install ok installed' not in synaptics_keyring.stdout
+      block:
+        - name: Download Synaptics repository keyring
+          ansible.builtin.get_url:
+            url: "{{ synaptics_keyring_deb }}"
+            dest: /tmp/synaptics-repository-keyring.deb
+            mode: "0644"
+        - name: Install Synaptics repository keyring
+          ansible.builtin.apt:
+            deb: /tmp/synaptics-repository-keyring.deb
+          notify: Apt update
+
     - name: Flush handlers so new repos are usable
       ansible.builtin.meta: flush_handlers
 
@@ -119,6 +139,22 @@
         update_cache: true
         cache_valid_time: 3600
       notify: Restart libvirt   # its first start during package install predates the libvirt-qemu user
+
+    # DisplayLink (Dell D6000S and similar USB docks): the evdi kernel module must be
+    # installed before displaylink-driver, otherwise apt picks the OEM kernel metapackage
+    # and replaces the generic kernel (github.com/DisplayLink/evdi/issues/598).
+    - name: DisplayLink USB graphics driver
+      when: displaylink
+      block:
+        - name: EVDI kernel module (generic, avoids OEM kernel swap)
+          ansible.builtin.apt:
+            name: [linux-modules-evdi-generic, libevdi1]
+            state: present
+
+        - name: DisplayLink driver (from Synaptics apt repository)
+          ansible.builtin.apt:
+            name: displaylink-driver
+            state: present
 
     # Not /releases/latest: that can be a mobile-only release with no .deb attached.
     # Discord and Obsidian update themselves once installed, so only the first install

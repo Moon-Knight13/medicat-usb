@@ -190,6 +190,10 @@ user_groups:
   - libvirt
   - kvm
 
+# DisplayLink: Dell D6000S and other USB docking stations that use DisplayLink chips.
+# Installs the driver from the Synaptics apt repository; auto-updates via apt.
+displaylink: true
+
 # NVIDIA: installed only when an NVIDIA GPU is detected.
 nvidia_container_toolkit: true
 
@@ -240,3 +244,6 @@ dconf_settings:
 
 # Proton VPN publishes its repo as a versioned .deb; bump when they do.
 protonvpn_release_deb: https://repo.protonvpn.com/debian/dists/stable/main/binary-all/protonvpn-stable-release_1.0.8_all.deb
+
+# Synaptics publishes DisplayLink via an apt repository; this keyring .deb configures it.
+synaptics_keyring_deb: https://www.synaptics.com/sites/default/files/Ubuntu/pool/stable/main/all/synaptics-repository-keyring.deb
