@@ -9,7 +9,7 @@ FROM golang:1.27.3 AS gitleaks-build
 ARG GITLEAKS_VERSION=8.30.1
 RUN CGO_ENABLED=0 go install "github.com/zricethezav/gitleaks/v8@v${GITLEAKS_VERSION}"
 
-FROM node:24@sha256:8fa96264f302f58bbb13aa7339c541547b56975766ce956c875da149452a3e40
+FROM node:24@sha256:9d266751ca3d7fdbe651c878ffd5ad0a42fed49a18c283509267c97f025b7496
 
 ARG TZ
 ENV TZ="$TZ"
