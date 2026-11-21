@@ -23,10 +23,16 @@ VPN_COUNTRY=${VPN_COUNTRY^^}; [[ "$VPN_COUNTRY" == GB ]] && VPN_COUNTRY=UK
 proton_conn() { nmcli -t -f NAME,DEVICE connection show --active | awk -F: '$2 ~ /^proton/ {print $1; exit}'; }
 proton_server() { proton_conn | sed 's/^ProtonVPN //'; }
 APP='^[^ ]*python[^ ]* [^ ]*/protonvpn-app'
+DBUS_NAME=proton.vpn.app.gtk
+dbus_app_gone() { ! dbus-send --session --dest=org.freedesktop.DBus --print-reply /org/freedesktop/DBus \
+    org.freedesktop.DBus.NameHasOwner string:"$DBUS_NAME" 2>/dev/null | grep -q "boolean true"; }
 quit_app() {
     pkill -f "$APP" || return 0
-    for _ in $(seq 20); do pgrep -f "$APP" >/dev/null || return 0; sleep 0.5; done
-    pkill -9 -f "$APP" || true; sleep 1
+    for _ in $(seq 20); do pgrep -f "$APP" >/dev/null || break; sleep 0.5; done
+    pgrep -f "$APP" >/dev/null && { pkill -9 -f "$APP" || true; sleep 1; }
+    # Wait for D-Bus name to release — the CLI checks this, not the process.
+    for _ in $(seq 20); do dbus_app_gone && return 0; sleep 0.5; done
+    return 1
 }
 vpn_started=""; vpn_before=""
 vpn_off() {
@@ -56,8 +62,11 @@ if [[ -n "$VPN_COUNTRY" && "${1:-}" != --no-vpn ]] && command -v protonvpn >/dev
         vpn_before=${srv%%#*}
         if pgrep -f "$APP" >/dev/null; then
             note "Closing the Proton VPN app" "deck connects Proton with the CLI, which cannot run beside the app."
-            quit_app
-            pgrep -f "$APP" >/dev/null && { note "deck not started" "Could not close the Proton VPN app. Quit it from its tray icon, then run deck again."; exit 1; }
+            quit_app || true
+            if pgrep -f "$APP" >/dev/null || ! dbus_app_gone; then
+                note "deck not started" "Could not close the Proton VPN app. Quit it from its tray icon, then run deck again."
+                exit 1
+            fi
         fi
         note "Connecting Proton VPN" "Fastest server in $VPN_COUNTRY for deck, with kill switch${vpn_before:+ (was $srv; back after deck)}..."
         # Kill switch for the session: if the VPN drops, the internet is blocked instead of
@@ -89,9 +98,22 @@ fi
 gdbus call --session --dest org.freedesktop.impl.portal.PermissionStore --object-path /org/freedesktop/impl/portal/PermissionStore \
     --method org.freedesktop.impl.portal.PermissionStore.SetPermission gnome true shortcuts-inhibitor \
     org.virt-manager.virt-viewer.desktop "['DENIED']" >/dev/null 2>&1 || true
+# Pick fullscreen monitor: largest display (external when docked, laptop when undocked).
+# Force X11 backend: on Wayland, fullscreen + monitor-mapping race leaves the window windowed.
+VV_MON=$(GDK_BACKEND=x11 python3 -c "
+import gi; gi.require_version('Gdk','3.0')
+from gi.repository import Gdk
+d=Gdk.Display.get_default(); best=0; best_a=0
+for i in range(d.get_n_monitors()):
+    g=d.get_monitor(i).get_geometry(); a=g.width*g.height
+    if a>best_a: best=i; best_a=a
+print(best+1)
+" 2>/dev/null) || VV_MON=1
+VV_CONF="${XDG_CONFIG_HOME:-$HOME/.config}/virt-viewer/settings"
+[[ -f "$VV_CONF" ]] && sed -i "s/^monitor-mapping=.*/monitor-mapping=1:$VV_MON;/" "$VV_CONF"
 # While deck's window is open the laptop must not dim, lock or suspend: video in the VM
 # is invisible to GNOME's own "media is playing" check.
-gnome-session-inhibit --inhibit idle:suspend --reason "deck is open" \
+GDK_BACKEND=x11 gnome-session-inhibit --inhibit idle:suspend --reason "deck is open" \
     virt-viewer -c $C --attach --full-screen --wait $NAME || true
 virsh -c $C destroy $NAME >/dev/null 2>&1 || true
 echo "deck stopped; everything from that session is gone."
