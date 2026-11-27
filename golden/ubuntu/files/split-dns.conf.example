@@ -1,0 +1,9 @@
+# Split DNS for the work VPN. Read by the 91-split-dns NetworkManager dispatcher.
+# Copy to /etc/golden/split-dns.conf and fill in your site's values.
+#
+# CONNECTION: the NetworkManager connection name for the work VPN (matches vpn-chain's INNER).
+# DNS_SERVERS: space-separated list of DNS servers reachable over the VPN.
+# DOMAIN: the DNS search domain routed to those servers (prefixed with ~ by the dispatcher).
+CONNECTION=changeme
+DNS_SERVERS=
+DOMAIN=
