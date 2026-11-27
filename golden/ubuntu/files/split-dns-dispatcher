@@ -1,0 +1,26 @@
+#!/bin/sh
+# Managed by golden/ubuntu/playbook.yml. When the work VPN connects, bind its DNS
+# servers and search domain via resolvectl so split DNS resolves work names through
+# the VPN tunnel instead of the default resolver.
+#
+# Reads /etc/golden/split-dns.conf (not in the repo; created during setup):
+#   CONNECTION=work
+#   DNS_SERVERS="10.0.0.1 10.0.0.2"
+#   DOMAIN=internal.example.net
+#
+# NetworkManager calls dispatchers with $1=interface $2=action and sets
+# CONNECTION_ID to the connection name. VPN connections also set VPN_IP_IFACE.
+CONF=/etc/golden/split-dns.conf
+[ -f "$CONF" ] || exit 0
+# shellcheck disable=SC1090
+. "$CONF"
+[ -n "$CONNECTION" ] && [ -n "$DNS_SERVERS" ] && [ -n "$DOMAIN" ] || exit 0
+[ "$2" = vpn-up ] || exit 0
+[ "$CONNECTION_ID" = "$CONNECTION" ] || exit 0
+# VPN_IP_IFACE is the tunnel device (tun0, etc.); fall back to the interface name.
+dev="${VPN_IP_IFACE:-$1}"
+[ -n "$dev" ] || exit 0
+# Bind DNS servers to the tunnel device (split DNS: only DOMAIN goes here).
+resolvectl dns "$dev" $DNS_SERVERS 2>/dev/null || exit 0
+resolvectl domain "$dev" "~${DOMAIN}" 2>/dev/null || true
+exit 0
